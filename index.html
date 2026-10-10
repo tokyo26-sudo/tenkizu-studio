@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.16</title>
+<title>天気図スタジオ v0.17</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -120,7 +120,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.16 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.17 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -2450,6 +2450,12 @@ function startOperator(){
     if(draft){ finishDraft(); return; }
     const [sx,sy]=evPos(e), h=handleHit(sx,sy), it=selOne();
     if(h && h.k==='v' && it && it.pts.length>minPts(it)){ pushHistory(); it.pts.splice(h.i,1); commit(); }
+    else if(h && h.k==='v' && it) toast('これ以上は点を消せません');
+    else if(h && h.k==='pv' && it && it.past){   // 台風の過去の経路の点
+      pushHistory(); it.past.splice(h.i,1);
+      if(!it.past.length){ delete it.past; renderProps(); }
+      commit();
+    }
   });
   cv.addEventListener('dblclick',e=>{
     if(tool!=='select') return;
