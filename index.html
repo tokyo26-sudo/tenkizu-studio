@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.13</title>
+<title>天気図スタジオ v0.14</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -120,7 +120,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.13 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.14 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -832,7 +832,97 @@ function drawPressure(ctx,cam,it){
 }
 
 /* ---- 台風 ---- */
+/* ---- 台風の進路予想・過去の経路 ---- */
+const FC_HOURS=[12,24,48,72], FC_RKM=[90,150,280,400];
+function fcTimeLabel(it,h){
+  if(!it.t0) return `${h}時間後`;
+  const d=new Date(it.t0); if(isNaN(d)) return `${h}時間後`;
+  d.setHours(d.getHours()+h);
+  return `${d.getDate()}日${d.getHours()}時`;
+}
+/* 円をつないだ形（となり同士の円を包む形の和）のふちだけを描く */
+const warnLayers=new Map();
+function strokeUnionOfHulls(ctx,cam,circles,color,lw){
+  if(!circles.length) return;
+  const key=cam.W+'x'+cam.H;
+  let L=warnLayers.get(key);
+  if(!L){ L=document.createElement('canvas'); L.width=cam.W; L.height=cam.H; if(warnLayers.size>6) warnLayers.clear(); warnLayers.set(key,L); }
+  const g=L.getContext('2d'); g.setTransform(1,0,0,1,0,0); g.clearRect(0,0,L.width,L.height);
+  const shape=(c)=>{ // 円ひとつ、または2つの円を包む形
+    g.beginPath();
+    for(let i=0;i<c.length-1||i===0;i++){
+      const a=c[i], b=c[Math.min(i+1,c.length-1)];
+      const pts=[];
+      for(let t=0;t<64;t++){ const an=t/64*2*PI; pts.push([a[0]+Math.cos(an)*a[2],a[1]+Math.sin(an)*a[2]]); if(b!==a) pts.push([b[0]+Math.cos(an)*b[2],b[1]+Math.sin(an)*b[2]]); }
+      // 凸包
+      pts.sort((p,q)=>p[0]-q[0]||p[1]-q[1]);
+      const cr=(o,p,q)=>(p[0]-o[0])*(q[1]-o[1])-(p[1]-o[1])*(q[0]-o[0]);
+      const lo=[],up=[];
+      for(const p of pts){ while(lo.length>=2&&cr(lo[lo.length-2],lo[lo.length-1],p)<=0) lo.pop(); lo.push(p); }
+      for(let j=pts.length-1;j>=0;j--){ const p=pts[j]; while(up.length>=2&&cr(up[up.length-2],up[up.length-1],p)<=0) up.pop(); up.push(p); }
+      const hull=lo.slice(0,-1).concat(up.slice(0,-1));
+      hull.forEach((p,j)=>j?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1])); g.closePath();
+      if(c.length===1) break;
+    }
+  };
+  g.lineJoin='round'; g.strokeStyle=color; g.lineWidth=lw*2; shape(circles); g.stroke();
+  g.globalCompositeOperation='destination-out'; g.fillStyle='#000'; shape(circles); g.fill();
+  g.globalCompositeOperation='source-over';
+  ctx.drawImage(L,0,0);
+}
+function drawTrack(ctx,cam,it){
+  const k=cam.k, fc=it.fc||[], past=it.past||[], passed=clamp(it.passed||0,0,fc.length);
+  const cur=cam.toS(it.lon,it.lat);
+  const halo='rgba(255,255,255,.9)';
+  ctx.save(); ctx.lineJoin='round'; ctx.lineCap='round';
+  // 過去の経路（実線）：過去の点 → 予想を出した場所 → 通りすぎた予想点 → いまの位置
+  const pastPts=past.map(p=>cam.toS(p[0],p[1]));
+  if(it.fcOrigin && (fc.length||past.length)) pastPts.push(cam.toS(it.fcOrigin[0],it.fcOrigin[1]));
+  for(let i=0;i<passed;i++) pastPts.push(cam.toS(fc[i].lon,fc[i].lat));
+  if(pastPts.length){
+    pastPts.push(cur);
+    if(it.showPast!==false){
+      for(const [w,col] of [[7*k,halo],[3.2*k,'#1d2733']]){ ctx.strokeStyle=col; ctx.lineWidth=w; ctx.beginPath(); pastPts.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])); ctx.stroke(); }
+      for(const q of pastPts.slice(0,-1)){ ctx.beginPath(); ctx.arc(q[0],q[1],4.5*k,0,2*PI); ctx.fillStyle='#1d2733'; ctx.fill(); ctx.lineWidth=2*k; ctx.strokeStyle='#fff'; ctx.stroke(); }
+    }
+  }
+  const rest=fc.slice(passed);
+  if(rest.length && it.showFc!==false){
+    const C=rest.map(f=>{ const [x,y]=cam.toS(f.lon,f.lat); return [x,y,(f.rKm||150)*cam.pxPerKm(f.lat),f]; });
+    // 暴風警戒域（赤）：予報円＋暴風域の広さ
+    if(it.showWarn!==false){
+      const ppk=cam.pxPerKm(it.lat);
+      const wc=[[cur[0],cur[1],(it.stormKm||0)*ppk]].concat(rest.map(f=>{ const [x,y]=cam.toS(f.lon,f.lat); return [x,y,((f.rKm||150)+(it.stormKm||0))*cam.pxPerKm(f.lat)]; }));
+      strokeUnionOfHulls(ctx,cam,wc.filter(c=>c[2]>0.5),'#d01515',3*k);
+    }
+    // 予報円（白の点線）
+    for(const [x,y,r] of C){
+      ctx.beginPath(); ctx.arc(x,y,r,0,2*PI);
+      ctx.fillStyle='rgba(255,255,255,.18)'; ctx.fill();
+      ctx.setLineDash([]); ctx.strokeStyle='rgba(40,52,64,.55)'; ctx.lineWidth=5*k; ctx.stroke();
+      ctx.setLineDash([9*k,7*k]); ctx.strokeStyle='#ffffff'; ctx.lineWidth=2.6*k; ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // 中心を結ぶ点線
+    const line=[cur].concat(C.map(c=>[c[0],c[1]]));
+    ctx.setLineDash([3*k,7*k]);
+    for(const [w,col] of [[6*k,halo],[2.6*k,'#1d2733']]){ ctx.strokeStyle=col; ctx.lineWidth=w; ctx.beginPath(); line.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])); ctx.stroke(); }
+    ctx.setLineDash([]);
+    // 中心の＋と日時
+    for(const [x,y,r,f] of C){
+      const c=6*k;
+      for(const [w,col] of [[6*k,halo],[2.4*k,'#1d2733']]){ ctx.strokeStyle=col; ctx.lineWidth=w; ctx.beginPath(); ctx.moveTo(x-c,y); ctx.lineTo(x+c,y); ctx.moveTo(x,y-c); ctx.lineTo(x,y+c); ctx.stroke(); }
+      if(it.showFcLabel!==false){
+        ctx.font=`700 ${20*k}px ${JP_FONT}`; ctx.textAlign='left'; ctx.textBaseline='middle';
+        haloText(ctx,fcTimeLabel(it,f.h||0),x+r*0.72+6*k,y-r*0.72-4*k,'#1d2733','rgba(255,255,255,.95)',5*k);
+      }
+    }
+  }
+  ctx.restore();
+}
+
 function drawTyphoon(ctx,cam,it,time){
+  if((it.fc&&it.fc.length)||(it.past&&it.past.length)) drawTrack(ctx,cam,it);
   const [x,y]=cam.toS(it.lon,it.lat), k=cam.k, ppk=cam.pxPerKm(it.lat);
   const rs=it.strongKm*ppk, rb=it.stormKm*ppk;
   ctx.save();
@@ -1755,6 +1845,7 @@ function startOperator(){
       if(d.t==='number') return `<label class="f">${d.label}<input type="number" data-k="${d.k}" min="${d.min}" max="${d.max}" step="${d.step||1}" value="${v}"></label>`;
       if(d.t==='select') return `<label class="f">${d.label}<select data-k="${d.k}">${d.opts.map(([ov,ol])=>`<option value="${ov}" ${String(ov)===String(v??d.dflt)?'selected':''}>${ol}</option>`).join('')}</select></label>`;
       if(d.t==='check') return `<label class="c"><input type="checkbox" data-k="${d.k}" ${(d.def?v!==false:!!v)?'checked':''}> ${d.label}</label>`;
+      if(d.t==='datetime') return `<label class="f">${d.label}<input type="datetime-local" data-k="${d.k}" value="${v||''}" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:14px"></label>`;
       if(d.t==='text') return `<label class="f">${d.label}<input type="text" data-k="${d.k}" maxlength="${d.max||40}" value="${String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:16px"></label>`;
       if(d.t==='textarea') return `<label class="f">${d.label}<textarea data-k="${d.k}" rows="2">${String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea></label>`;
       if(d.t==='seg') return `<div class="row">${d.label?`<span style="font-size:12px;color:var(--sub)">${d.label}</span>`:''}${d.opts.map(([ov,ol])=>`<button class="btn sm ${String(ov)===String(v??d.dflt)?'on':''}" data-k="${d.k}" data-val="${ov}">${ol}</button>`).join('')}</div>`;
@@ -2044,9 +2135,11 @@ function startOperator(){
   function propDefs(it){
     switch(it.type){
       case 'high': case 'low': return [STYLE_SEL,CHAR_DEF(it),FONT_SEL,{k:'showHpa',t:'check',label:'気圧の数字を表示'},{k:'hpa',t:'number',label:'中心気圧（hPa）',min:870,max:1090},{k:'size',t:'range',label:'丸囲みの大きさ',min:36,max:200,step:2}];
-      case 'typhoon': return [STYLE_SEL,CHAR_DEF(it),FONT_SEL,{k:'showName',t:'check',label:'「台風○号」を表示',def:true},{k:'showSpin',t:'check',label:'ぐるぐるを表示（天気図風のとき）',def:true},{k:'showHpa',t:'check',label:'気圧の数字を表示'},
+      case 'typhoon': return (it.fc&&it.fc.length ? [{k:'t0',t:'datetime',label:'進路予想：いまの日時（12・24・48・72時間後の日時を自動で表示）'},{k:'showFc',t:'check',label:'予報円・進路を表示',def:true},{k:'showWarn',t:'check',label:'暴風警戒域（赤い線）を表示',def:true},{k:'showFcLabel',t:'check',label:'日時を表示',def:true}] : [])
+        .concat(it.past&&it.past.length ? [{k:'showPast',t:'check',label:'過去の経路を表示',def:true}] : [])
+        .concat([STYLE_SEL,CHAR_DEF(it),FONT_SEL,{k:'showName',t:'check',label:'「台風○号」を表示',def:true},{k:'showSpin',t:'check',label:'ぐるぐるを表示（天気図風のとき）',def:true},{k:'showHpa',t:'check',label:'気圧の数字を表示'},
         {k:'no',t:'number',label:'台風の番号（号）',min:1,max:40},{k:'hpa',t:'number',label:'中心気圧（hPa）',min:870,max:1010},
-        {k:'stormKm',t:'range',label:'暴風域（赤）半径',min:0,max:500,step:10,unit:'km'},{k:'strongKm',t:'range',label:'強風域（黄）半径',min:0,max:1200,step:10,unit:'km'},{k:'size',t:'range',label:'丸囲みの大きさ',min:36,max:200,step:2}];
+        {k:'stormKm',t:'range',label:'暴風域（赤）半径',min:0,max:500,step:10,unit:'km'},{k:'strongKm',t:'range',label:'強風域（黄）半径',min:0,max:1200,step:10,unit:'km'},{k:'size',t:'range',label:'丸囲みの大きさ',min:36,max:200,step:2}]);
       case 'icon': return [{k:'size',t:'range',label:'大きさ',min:20,max:400,step:2}];
       case 'front': return [{k:'kind',t:'select',label:'前線の種類',opts:Object.entries(FRONTS).map(([k2,f])=>[k2,f.name])}].concat(LINE_LABEL);
       case 'arrow': return DEFS.arrow.concat(LINE_LABEL);
@@ -2092,6 +2185,13 @@ function startOperator(){
     let h=(setMode==='side'?`<p style="margin:0 0 8px;font-weight:600">${TYPE_NAME[it.type]||''}</p>`:'')+fieldsHTML(defs,it);
     if(it.type==='high'||it.type==='low') h+=`<div class="row"><button class="btn sm" data-act="swap">${it.type==='high'?'低気圧':'高気圧'}に切り替え</button></div>`;
     if(it.type==='front'||it.type==='arrow') h+=`<div class="row"><button class="btn sm" data-act="flip">向きを反転</button></div>`;
+    if(it.type==='typhoon'){
+      const hasFc=it.fc&&it.fc.length, hasPast=it.past&&it.past.length;
+      h=`<div class="row" style="margin-bottom:8px"><button class="btn sm primary" data-act="fcDraw">🌀 進路予想を描く</button><button class="btn sm" data-act="pastDraw">過去の経路を描く</button></div>`
+       +(hasFc?`<div class="row"><button class="btn sm primary" data-act="fcRun">▶ この進路で動かす</button><button class="btn sm danger" data-act="fcClear">進路予想を消す</button></div><p class="note">予想の点・円のふちの青い点はドラッグで直せます。</p>`:'')
+       +(hasPast?`<div class="row"><button class="btn sm danger" data-act="pastClear">過去の経路を消す</button></div>`:'')
+       +h;
+    }
     if(it.type!=='warp') h+=Z_ROW;
     h+=`<div class="row"><button class="btn sm" data-act="copy">コピー</button><button class="btn sm danger" data-act="del">削除</button></div>`;
     propsEl.innerHTML=h; bindZ(propsEl);
@@ -2102,6 +2202,11 @@ function startOperator(){
       else if(a==='copy'){ copySel(); paste(); }
       else if(a==='flip'){ pushHistory(); it.pts.reverse(); commit(); }
       else if(a==='swap'){ pushHistory(); it.type = it.type==='high'?'low':'high'; commit(); renderProps(); }
+      else if(a==='fcDraw'){ startTrackDraft('fc',it); }
+      else if(a==='pastDraw'){ startTrackDraft('past',it); }
+      else if(a==='fcClear'){ pushHistory(); delete it.fc; delete it.fcOrigin; it.passed=0; commit(); renderProps(); }
+      else if(a==='pastClear'){ pushHistory(); delete it.past; if(!(it.fc&&it.fc.length)) delete it.fcOrigin; commit(); renderProps(); }
+      else if(a==='fcRun'){ runTrack(it); }
     });
   }
   function renderIsoProps(el){
@@ -2285,6 +2390,11 @@ function startOperator(){
       H.push({k:'ix',x:x+Math.cos(a)*rx*ppk, y:y+Math.sin(a)*rx*ppk});
       H.push({k:'iy',x:x-Math.sin(a)*ry*ppk, y:y+Math.cos(a)*ry*ppk});
     }
+    if(it.type==='typhoon'){
+      (it.fc||[]).forEach((f,i)=>{ if(i<(it.passed||0)) return; const [x,y]=c.toS(f.lon,f.lat), r=(f.rKm||150)*c.pxPerKm(f.lat);
+        H.push({k:'fv',i,x,y}); H.push({k:'fr',i,x:x+r,y}); });
+      (it.past||[]).forEach((p,i)=>{ const [x,y]=c.toS(p[0],p[1]); H.push({k:'pv',i,x,y}); });
+    }
     return H;
   }
   function handleHit(sx,sy){
@@ -2368,7 +2478,12 @@ function startOperator(){
           if(Math.hypot(sx-fx,sy-fy)<12*d){ finishDraft(true); return; }
         }
       }
-      pts.push([lon,lat]); return;
+      pts.push([lon,lat]);
+      if(draft.kind==='fc'){
+        if(pts.length>=FC_HOURS.length) finishDraft();
+        else toast(`次は ${FC_HOURS[pts.length]}時間後 の場所をクリック`);
+      }
+      return;
     }
     if(tool==='cmark'||tool==='warp'||tool==='station'){
       pushHistory();
@@ -2430,6 +2545,10 @@ function startOperator(){
         }
         if(h.k==='m'){ pushHistory(); it.pts.splice(h.i+1,0,[lon,lat]); commit(); drag={mode:'vertex', id:it.id, vi:h.i+1}; return; }
         if(h.k==='ex'||h.k==='ey'||h.k==='ix'||h.k==='iy'||h.k==='lp'){ pushHistory(); drag={mode:h.k, id:it.id}; return; }
+        if(h.k==='fv'||h.k==='fr'||h.k==='pv'){
+          if(h.k==='pv' && e.altKey){ pushHistory(); it.past.splice(h.i,1); commit(); return; }
+          pushHistory(); drag={mode:h.k, id:it.id, i:h.i}; return;
+        }
       }
     }
     const hit=hitTest(sx,sy);
@@ -2485,11 +2604,22 @@ function startOperator(){
         const it=getItem(id), o=drag.origs.get(id); if(!it||!o) continue;
         if(it.pts){ it.pts=o.pts.map(p=>{ const q=toW(p[0],p[1]); return fromW(q[0]+dx,q[1]+dy); }); }
         if(it.lon!=null){ const q=toW(o.lon,o.lat); [it.lon,it.lat]=fromW(q[0]+dx,q[1]+dy); }
+        const sh=(lon,lat)=>{ const q=toW(lon,lat); return fromW(q[0]+dx,q[1]+dy); };
+        if(o.fc) it.fc=o.fc.map(f=>{ const [a2,b2]=sh(f.lon,f.lat); return Object.assign({},f,{lon:a2,lat:b2}); });
+        if(o.past) it.past=o.past.map(p=>sh(p[0],p[1]));
+        if(o.fcOrigin) it.fcOrigin=sh(o.fcOrigin[0],o.fcOrigin[1]);
       }
       drag.moved=true; commit();
     }else if(drag.mode==='vertex'){
       const it=getItem(drag.id); if(!it) return;
       it.pts[drag.vi]=c.toLL(sx,sy); commit();
+    }else if(drag.mode==='fv'||drag.mode==='fr'||drag.mode==='pv'){
+      const it=getItem(drag.id); if(!it) return;
+      const [lon,lat]=c.toLL(sx,sy);
+      if(drag.mode==='fv'){ it.fc[drag.i].lon=lon; it.fc[drag.i].lat=lat; }
+      else if(drag.mode==='pv'){ it.past[drag.i]=[lon,lat]; }
+      else{ const f=it.fc[drag.i], [x,y]=c.toS(f.lon,f.lat); f.rKm=clamp(Math.hypot(sx-x,sy-y)/c.pxPerKm(f.lat),20,1200); }
+      commit();
     }else if(drag.mode==='lp'){
       const it=getItem(drag.id); if(!it) return;
       const path=it.type==='isoline'?isolinePath(c,it):catmull(it.pts.map(p=>c.toS(p[0],p[1]))), L=measure(path), tot=L[L.length-1]||1;
@@ -2579,6 +2709,22 @@ function startOperator(){
   }
   function finishDraft(closed){
     if(!draft) return;
+    if(draft.kind==='fc'||draft.kind==='past'){
+      const it=getItem(draft.id);
+      if(it && draft.pts.length){
+        pushHistory();
+        if(draft.kind==='fc'){
+          it.fc=draft.pts.map((p,i)=>({lon:p[0],lat:p[1],h:FC_HOURS[i],rKm:FC_RKM[i]}));
+          it.fcOrigin=[it.lon,it.lat]; it.passed=0;
+          if(!it.t0){ const d=new Date(); d.setMinutes(0,0,0); const p2=n=>String(n).padStart(2,'0'); it.t0=`${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}T${p2(d.getHours())}:00`; }
+        }else{
+          it.past=draft.pts.slice();
+          if(!it.fcOrigin) it.fcOrigin=null;
+        }
+        commit();
+      }
+      const id=draft.id; draft=null; select(id); return;
+    }
     const need=draft.kind==='blob'?3:2;
     if(draft.kind==='iso' && draft.pts.length>=2){
       pushHistory();
@@ -2775,6 +2921,13 @@ function startOperator(){
       const prev = cursor ? sp.concat([cursor]) : sp;
       ctx.globalAlpha=.75;
       if(draft.kind==='front') drawFrontScreen(ctx,k,prev,draft.sub);
+      else if(draft.kind==='fc'||draft.kind==='past'){
+        const ty=getItem(draft.id), o=ty?c.toS(ty.lon,ty.lat):sp[0];
+        const line = draft.kind==='fc' ? [o].concat(prev) : prev.concat([o]);
+        ctx.setLineDash(draft.kind==='fc'?[4*k,7*k]:[]); ctx.strokeStyle='#1d2733'; ctx.lineWidth=3*k;
+        ctx.beginPath(); line.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])); ctx.stroke(); ctx.setLineDash([]);
+        if(draft.kind==='fc') sp.forEach((q,i)=>{ const r=FC_RKM[i]*c.pxPerKm(c.toLL(q[0],q[1])[1]); ctx.beginPath(); ctx.arc(q[0],q[1],r,0,2*PI); ctx.setLineDash([8*k,6*k]); ctx.strokeStyle='#64748b'; ctx.lineWidth=2*k; ctx.stroke(); ctx.setLineDash([]); });
+      }
       else if(draft.kind==='iso'){ ctx.strokeStyle=opts.isoline.color; ctx.lineWidth=2.4*k; ctx.lineJoin='round'; const pth=catmull(prev,8); ctx.beginPath(); pth.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])); ctx.stroke(); }
       else if(draft.kind==='arrow') drawArrowScreen(ctx,k,prev,opts.arrow);
       else{
@@ -2824,7 +2977,7 @@ function startOperator(){
     head.addEventListener('pointerup',()=>{ st=null; });
   })();
   function placePop(){
-    const show = setMode==='pop' && sel.size>0 && popClosedKey!==selKey() && !drag && !opTween && !edState;
+    const show = setMode==='pop' && sel.size>0 && popClosedKey!==selKey() && !drag && !opTween && !edState && !draft;
     if(!show){ pop.style.display='none'; return; }
     pop.style.display='flex';
     const sr=stage.getBoundingClientRect(), cr=cv.getBoundingClientRect(), f=cr.width/cv.width;
@@ -2841,6 +2994,35 @@ function startOperator(){
     }
     L=clamp(L,4,Math.max(4,sr.width-pw-4)); T=clamp(T,4,Math.max(4,sr.height-ph-4));
     pop.style.left=L+'px'; pop.style.top=T+'px';
+  }
+
+  /* ---------- 台風の進路 ---------- */
+  function startTrackDraft(kind,it){
+    if(tool!=='select') setTool('select');
+    draft={kind, id:it.id, pts:[]};
+    pop.style.display='none';
+    toast(kind==='fc' ? '12時間後 の場所をクリック（24・48・72時間後と続けて4か所）'
+                      : '過去の場所を古い順にクリック → 最後の点をもう一度クリック（またはEnter）で確定');
+  }
+  function runTrack(it){
+    const fc=it.fc||[]; if(!fc.length) return;
+    const hours=[0].concat(fc.map(f=>f.h));
+    // いまの状態をシーンにして、そのあとに 12h・24h… のシーンを作る
+    if(state.cur<0 || !state.scenes.length){ state.scenes.push({id:uid(), name:fcTimeLabel(it,0), snap:snapshot()}); state.cur=state.scenes.length-1; }
+    else state.scenes[state.cur].snap=snapshot();
+    const base=clone(state.scenes[state.cur].snap);
+    const ty0=base.items.find(i=>i.id===it.id); if(!ty0) return;
+    ty0.passed=0; ty0.lon=ty0.fcOrigin?ty0.fcOrigin[0]:ty0.lon; ty0.lat=ty0.fcOrigin?ty0.fcOrigin[1]:ty0.lat;
+    state.scenes[state.cur].snap=clone(base);
+    let at=state.cur;
+    for(let i=0;i<fc.length;i++){
+      const sn=clone(base), ty=sn.items.find(x=>x.id===it.id);
+      ty.lon=fc[i].lon; ty.lat=fc[i].lat; ty.passed=i+1;
+      at++; state.scenes.splice(at,0,{id:uid(), name:fcTimeLabel(it,hours[i+1]), snap:sn});
+    }
+    const first=state.cur;
+    renderScenes(); gotoScene(first);
+    toast(`${fc.length+1}つのシーンを作りました。「次へ ▶」か自動再生で台風が進みます`);
   }
 
   /* ---------- シーン ---------- */
