@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.18</title>
+<title>天気図スタジオ v0.19</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -120,7 +120,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.18 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.19 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -155,6 +155,7 @@ body.display.idle{cursor:none}
 
     <div class="sec">
       <h2>地図</h2>
+      <label class="f">図法<select id="proj"><option value="merc">メルカトル図法</option><option value="lcc">ランベルト正角円錐図法（天気図ふう）</option></select></label>
       <label class="f">背景地図<select id="basemap"></select></label>
       <label class="c"><input type="checkbox" id="grid"> 緯線・経線</label>
       <label class="c"><input type="checkbox" id="mBorders"> 国境線（簡略地図のとき）</label>
@@ -286,14 +287,39 @@ function my(lat){ lat=clamp(lat,-85,85); const s=Math.sin(lat*PI/180); return 0.
 function ilon(x){ return x*360-180; }
 function ilat(y){ return Math.atan(Math.sinh(PI*(1-2*y)))*180/PI; }
 
-function makeCam(view,W,H){
+/* ---- 図法：メルカトル／ランベルト正角円錐（標準緯線 30°・60°、中心経線 135°E） ---- */
+function makeLCC(lon0,lat0,p1,p2){
+  const rad=d=>d*PI/180, t=f=>Math.tan(PI/4+rad(f)/2);
+  const n=Math.log(Math.cos(rad(p1))/Math.cos(rad(p2)))/Math.log(t(p2)/t(p1));
+  const F=Math.cos(rad(p1))*Math.pow(t(p1),n)/n;
+  const R=1/(2*PI)/Math.cos(rad(lat0));   // 日本あたりでメルカトルと同じくらいの大きさに
+  const rho=lat=>R*F/Math.pow(t(clamp(lat,-70,89.9)),n), rho0=rho(lat0);
+  const dl=lon=>((lon-lon0+180)%360+360)%360-180;
+  return {id:'lcc', lon0, lat0, n,
+    x:(lon,lat)=>0.5+rho(lat)*Math.sin(n*rad(dl(lon))),
+    y:(lon,lat)=>0.5-(rho0-rho(lat)*Math.cos(n*rad(dl(lon)))),
+    inv:(X,Y)=>{ const x=X-0.5, ry=rho0-(0.5-Y), q=Math.hypot(x,ry), th=Math.atan2(x,ry);
+      return [lon0+th/n*180/PI, (2*Math.atan(Math.pow(R*F/q,1/n))-PI/2)*180/PI]; },
+    perKm:lat=>n*rho(lat)/(Math.cos(rad(clamp(lat,-70,89.9)))*6371.0088),
+    latMin:-35, latMax:84
+  };
+}
+const PROJS={
+  merc:{id:'merc', x:(lon,lat)=>mx(lon), y:(lon,lat)=>my(lat), inv:(X,Y)=>[ilon(X),ilat(Y)],
+        perKm:lat=>1/(40075.017*Math.cos(clamp(lat,-85,85)*PI/180)), latMin:-84, latMax:84},
+  lcc:makeLCC(135,35,30,60)
+};
+let PROJ=PROJS.merc;
+const projOf=st=>PROJS[(st && st.mapOpts && st.mapOpts.proj)||'merc']||PROJS.merc;
+function makeCam(view,W,H,P){
+  if(P) PROJ=P; P=PROJ;
   const wp = 256*Math.pow(2,view.z)*(H/REF_H);
-  const cx = mx(view.lon)*wp, cy = my(view.lat)*wp;
+  const cx = P.x(view.lon,view.lat)*wp, cy = P.y(view.lon,view.lat)*wp;
   return {
-    W,H,wp,cx,cy,k:H/REF_H,
-    toS(lon,lat){ return [mx(lon)*wp-cx+W/2, my(lat)*wp-cy+H/2]; },
-    toLL(sx,sy){ return [ilon((sx-W/2+cx)/wp), ilat((sy-H/2+cy)/wp)]; },
-    pxPerKm(lat){ return wp/(40075.017*Math.cos(clamp(lat,-85,85)*PI/180)); }
+    W,H,wp,cx,cy,k:H/REF_H,P,
+    toS(lon,lat){ return [P.x(lon,lat)*wp-cx+W/2, P.y(lon,lat)*wp-cy+H/2]; },
+    toLL(sx,sy){ return P.inv((sx-W/2+cx)/wp, (sy-H/2+cy)/wp); },
+    pxPerKm(lat){ return wp*P.perKm(lat); }
   };
 }
 
@@ -425,48 +451,35 @@ const PREF_ENC=[[141683,40452,-28,-23,-40,-9,-28,-13,-5,-14,5,-12,-5,-7,-45,-26,
 const decodeLines=enc=>enc.map(a=>{ const out=[]; let x=0,y=0; for(let i=0;i<a.length;i+=2){ x+=a[i]; y+=a[i+1]; out.push([x/1000,y/1000]); } return out; });
 function linesPath(lines,closed){
   const p=new Path2D();
-  for(const l of lines){ l.forEach((c,i)=>{ const X=mx(c[0])*LS, Y=my(c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); if(closed) p.closePath(); }
+  for(const l of lines){ l.forEach((c,i)=>{ const X=PROJ.x(c[0],c[1])*LS, Y=PROJ.y(c[0],c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); if(closed) p.closePath(); }
   return p;
 }
-const lakePath=linesPath(decodeLines(LAKES_ENC),true);
-const prefPath=linesPath(decodeLines(PREF_ENC),false);
-const MAPDATA={land50:null, land10:null, borders:null};
+const LAKE_LINES=decodeLines(LAKES_ENC), PREF_LINES=decodeLines(PREF_ENC);
+const smallPaths={};
+const lakePathNow=()=>smallPaths['lake@'+PROJ.id]||(smallPaths['lake@'+PROJ.id]=linesPath(LAKE_LINES,true));
+const prefPathNow=()=>smallPaths['pref@'+PROJ.id]||(smallPaths['pref@'+PROJ.id]=linesPath(PREF_LINES,false));
+const MAPRAW={}, MAPDATA={};
 const mapLoading={};
 const inRegion=(ring,x0,y0,x1,y1)=>ring.some(c=>c[0]>=x0&&c[0]<=x1&&c[1]>=y0&&c[1]<=y1);
+function unwrapRing(ring){
+  let off=0, prev=null; const out=[];
+  for(const c of ring){
+    let lon=c[0]+off;
+    if(prev!=null){ while(lon-prev>180){ off-=360; lon-=360; } while(lon-prev<-180){ off+=360; lon+=360; } }
+    out.push([lon,c[1],c[0]]); prev=lon;
+  }
+  return out;
+}
 function loadMapData(name){
-  if(MAPDATA[name] || mapLoading[name] || typeof topojson==='undefined') return mapLoading[name]||null;
+  if(MAPRAW[name] || mapLoading[name] || typeof topojson==='undefined') return mapLoading[name]||null;
   const url={land50:'land-50m',land10:'land-10m',borders:'countries-50m'}[name];
   mapLoading[name]=fetch(`https://cdn.jsdelivr.net/npm/world-atlas@2/${url}.json`)
     .then(r=>r.json())
     .then(topo=>{
-      const p=new Path2D();
-      // 日付変更線（経度180度）をまたぐ線は、経度をつなげて（190度…のように）描く
-      const unwrap=ring=>{
-        let off=0, prev=null; const out=[];
-        for(const c of ring){
-          let lon=c[0]+off;
-          if(prev!=null){ while(lon-prev>180){ off-=360; lon-=360; } while(lon-prev<-180){ off+=360; lon+=360; } }
-          out.push([lon,c[1],c[0]]); prev=lon;
-        }
-        return out;
-      };
-      const meanLon=r=>r.reduce((a,c)=>a+c[0],0)/r.length;
-      const variants=r=>{ const u=unwrap(r); return u.some(c=>c[0]<-100) ? [u, u.map(c=>[c[0]+360,c[1],c[2]])] : [u]; };
-      const ps=new Path2D();   // 海岸線（ふち線）用：180度の切れ目は描かない
-      const seam=c=>Math.abs(c[2]??c[0])>179.99;
-      const draw=(r,close)=>{
-        r.forEach((c,i)=>{ const X=mx(c[0])*LS,Y=my(c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); if(close) p.closePath();
-        const n=r.length, segs=close?n:n-1; let pen=false;
-        for(let i=0;i<segs;i++){
-          const a=r[i], b=r[(i+1)%n];
-          if(seam(a)&&seam(b)){ pen=false; continue; }
-          if(!pen){ ps.moveTo(mx(a[0])*LS,my(a[1])*LS); pen=true; }
-          ps.lineTo(mx(b[0])*LS,my(b[1])*LS);
-        }
-      };
+      const list=[];   // {r:輪, holes:[], close, south}
       if(name==='borders'){
         const mesh=topojson.mesh(topo, topo.objects.countries, (a,b)=>a!==b);
-        for(const line of mesh.coordinates) for(const v of variants(line)){ if(inRegion(v,60,-15,260,80)) draw(v,false); }
+        for(const line of mesh.coordinates) list.push({r:unwrapRing(line),holes:[],close:false,south:false});
       }else{
         const geo=topojson.feature(topo, topo.objects.land);
         const feats=geo.type==='FeatureCollection'?geo.features:[geo];
@@ -474,31 +487,68 @@ function loadMapData(name){
           const g=f.geometry; if(!g) continue;
           const polys=g.type==='Polygon'?[g.coordinates]:g.coordinates;
           for(const poly of polys){
-            const south=poly[0].some(c=>c[1]<-60);   // 南極はそのまま
-            if(south){ if(name!=='land10') poly.forEach(r=>draw(r,true)); continue; }
-            const outer=variants(poly[0]);
-            outer.forEach((o,vi)=>{
-              // 10m は東アジア〜太平洋あたりだけ使う（軽くするため）
-              if(name==='land10' && !inRegion(o,85,-12,260,80)) return;
-              draw(o,true);
-              for(const hole of poly.slice(1)){ let h=unwrap(hole); const dm=meanLon(o)-meanLon(h); h=h.map(c=>[c[0]+Math.round(dm/360)*360,c[1],c[2]]); draw(h,true); }
-            });
+            const south=poly[0].some(c=>c[1]<-60);
+            if(south){ if(name!=='land10') list.push({r:poly[0],holes:poly.slice(1),close:true,south:true}); continue; }
+            list.push({r:unwrapRing(poly[0]),holes:poly.slice(1).map(unwrapRing),close:true,south:false});
           }
         }
       }
-      MAPDATA[name]=p; MAPDATA[name+'_line']=ps;
+      MAPRAW[name]=list;
     })
     .catch(e=>{ console.warn('map load failed',name,e); mapLoading[name]=null; });
   return mapLoading[name];
 }
+/* いまの図法で Path2D を作る（図法ごとに1回だけ） */
+function mapPath(name){
+  const key=name+'@'+PROJ.id;
+  if(MAPDATA[key]) return MAPDATA[key];
+  loadMapData(name);
+  const list=MAPRAW[name]; if(!list) return null;
+  const P=PROJ, p=new Path2D(), ps=new Path2D();   // ps：ふち線用（180度の切れ目は描かない）
+  const seam=c=>Math.abs(c[2]??c[0])>179.99;
+  const draw=(r,close)=>{
+    r.forEach((c,i)=>{ const X=P.x(c[0],c[1])*LS,Y=P.y(c[0],c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); if(close) p.closePath();
+    const n=r.length, segs=close?n:n-1; let pen=false;
+    for(let i=0;i<segs;i++){
+      const a=r[i], b=r[(i+1)%n];
+      if(seam(a)&&seam(b)){ pen=false; continue; }
+      if(!pen){ ps.moveTo(P.x(a[0],a[1])*LS,P.y(a[0],a[1])*LS); pen=true; }
+      ps.lineTo(P.x(b[0],b[1])*LS,P.y(b[0],b[1])*LS);
+    }
+  };
+  const meanLon=r=>r.reduce((a,c)=>a+c[0],0)/r.length;
+  const shift=(r,d)=>d?r.map(c=>[c[0]+d,c[1],c[2]]):r;
+  const lcc=P.id==='lcc';
+  for(const e of list){
+    if(e.south){ if(!lcc){ draw(e.r,true); e.holes.forEach(h=>draw(h,true)); } continue; }
+    let vars;
+    if(lcc){
+      // 中心経線の反対側（大西洋）で切れる。切れ目をまたぐ輪は使わない（日本からは見えない所）
+      const d=Math.round((P.lon0-meanLon(e.r))/360)*360, r=shift(e.r,d);
+      if(r.some(c=>c[0]<P.lon0-180||c[0]>P.lon0+180)) continue;
+      vars=[r];
+    }else{
+      vars=[e.r]; if(e.r.some(c=>c[0]<-100)) vars.push(shift(e.r,360));
+    }
+    for(const o of vars){
+      if(name==='land10' && !inRegion(o,85,-12,260,80)) continue;
+      if(name==='borders' && !inRegion(o,60,-15,260,80)) continue;
+      draw(o,e.close);
+      for(const h0 of e.holes){ const h=shift(h0,Math.round((meanLon(o)-meanLon(h0))/360)*360); draw(h,true); }
+    }
+  }
+  return (MAPDATA[key]={p,ps});
+}
 const loadLand=()=>loadMapData('land50');
-const DEF_MAPOPTS={borders:true, lakes:true, pref:false, prefW:1.2, prefColor:'#6b7785', prefDash:false};
+const DEF_MAPOPTS={proj:'merc', borders:true, lakes:true, pref:false, prefW:1.2, prefColor:'#6b7785', prefDash:false};
+// ランベルト図法のときは地理院タイルが使えないので、簡略地図にする
+const baseOf=st=>{ const bm=BASEMAPS[st.basemap]?st.basemap:'simple'; return projOf(st).id==='lcc'?'simple':bm; };
 const mapOptsOf=st=>Object.assign({},DEF_MAPOPTS,st.mapOpts||{});
 function landFor(cam){
   const want10 = cam.wp/(cam.H/REF_H) > 256*Math.pow(2,4.6);
-  if(want10){ loadMapData('land10'); if(MAPDATA.land10) return [MAPDATA.land10,MAPDATA.land10_line]; }
-  loadMapData('land50');
-  return MAPDATA.land50 ? [MAPDATA.land50,MAPDATA.land50_line] : null;
+  if(want10){ const m=mapPath('land10'); if(m) return [m.p,m.ps]; }
+  const m=mapPath('land50');
+  return m ? [m.p,m.ps] : null;
 }
 function drawSimple(ctx,cam,st,withLakes){
   ctx.fillStyle='#e9f1f7'; ctx.fillRect(0,0,cam.W,cam.H);
@@ -508,7 +558,7 @@ function drawSimple(ctx,cam,st,withLakes){
   ctx.setTransform(s,0,0,s,cam.W/2-cam.cx,cam.H/2-cam.cy);
   ctx.fillStyle='#fbf8ef'; ctx.fill(land);
   ctx.lineJoin='round'; ctx.lineWidth=1.5*cam.k/s; ctx.strokeStyle='#3d4852'; ctx.stroke(landLine);
-  if(withLakes && M.lakes){ ctx.fillStyle='#e9f1f7'; ctx.fill(lakePath); ctx.lineWidth=1.1*cam.k/s; ctx.stroke(lakePath); }
+  if(withLakes && M.lakes){ ctx.fillStyle='#e9f1f7'; ctx.fill(lakePathNow()); ctx.lineWidth=1.1*cam.k/s; ctx.stroke(lakePathNow()); }
   ctx.restore();
 }
 function drawMapLines(ctx,cam,st,simple){
@@ -517,12 +567,12 @@ function drawMapLines(ctx,cam,st,simple){
   ctx.setTransform(s,0,0,s,cam.W/2-cam.cx,cam.H/2-cam.cy);
   ctx.lineJoin='round'; ctx.lineCap='round';
   if(simple && M.borders){
-    loadMapData('borders');
-    if(MAPDATA.borders_line){ ctx.setLineDash([6*k/s,4*k/s]); ctx.lineWidth=1.3*k/s; ctx.strokeStyle='#5d6b7a'; ctx.stroke(MAPDATA.borders_line); ctx.setLineDash([]); }
+    const bd=mapPath('borders');
+    if(bd){ ctx.setLineDash([6*k/s,4*k/s]); ctx.lineWidth=1.3*k/s; ctx.strokeStyle='#5d6b7a'; ctx.stroke(bd.ps); ctx.setLineDash([]); }
   }
   if(M.pref){
     ctx.setLineDash(M.prefDash?[5*k/s,4*k/s]:[]);
-    ctx.lineWidth=(M.prefW||1.2)*k/s; ctx.strokeStyle=M.prefColor||'#6b7785'; ctx.stroke(prefPath);
+    ctx.lineWidth=(M.prefW||1.2)*k/s; ctx.strokeStyle=M.prefColor||'#6b7785'; ctx.stroke(prefPathNow());
     ctx.setLineDash([]);
   }
   ctx.restore();
@@ -533,7 +583,7 @@ function drawBase(ctx,cam,st,B){
   const M=mapOptsOf(st);
   const pure=B.simple && !B.tile && !B.overlay;
   if(pure){
-    const v=st.view, key=[v.lon.toFixed(6),v.lat.toFixed(6),v.z.toFixed(5),JSON.stringify(M),!!MAPDATA.land50,!!MAPDATA.land10,!!MAPDATA.borders].join('|');
+    const v=st.view, key=[v.lon.toFixed(6),v.lat.toFixed(6),v.z.toFixed(5),JSON.stringify(M),!!MAPRAW.land50,!!MAPRAW.land10,!!MAPRAW.borders,PROJ.id].join('|');
     const ck=cam.W+'x'+cam.H;
     let c=bgCache.get(ck);
     if(!c){ c={cv:document.createElement('canvas'),key:null}; c.cv.width=cam.W; c.cv.height=cam.H; if(bgCache.size>8) bgCache.clear(); bgCache.set(ck,c); }
@@ -555,6 +605,7 @@ function drawBase(ctx,cam,st,B){
 }
 function drawGrid(ctx,cam,simple){
   const k=cam.k;
+  if(cam.P.id!=='merc') return drawGridCurved(ctx,cam,simple);
   ctx.save();
   ctx.strokeStyle = simple ? 'rgba(60,80,100,.45)' : 'rgba(30,50,80,.35)';
   ctx.lineWidth = 1.3*k; ctx.setLineDash([7*k,7*k]);
@@ -571,6 +622,36 @@ function drawGrid(ctx,cam,simple){
     const [,y]=cam.toS(0,lat);
     ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cam.W,y); ctx.stroke();
     ctx.textAlign='left'; ctx.textBaseline='bottom'; ctx.fillText((lat>=0?lat+'°N':(-lat)+'°S'), 6*k, y-4*k);
+  }
+  ctx.restore();
+}
+
+function drawGridCurved(ctx,cam,simple){
+  const k=cam.k, W=cam.W, H=cam.H, m=40*k;
+  ctx.save();
+  ctx.strokeStyle = simple ? 'rgba(60,80,100,.45)' : 'rgba(30,50,80,.35)';
+  ctx.lineWidth = 1.3*k; ctx.setLineDash([7*k,7*k]);
+  ctx.font = `600 ${18*k}px ${JP_FONT}`; ctx.fillStyle = 'rgba(30,45,60,.75)'; ctx.textBaseline='bottom'; ctx.textAlign='left';
+  const inside=q=>q[0]>-m&&q[0]<W+m&&q[1]>-m&&q[1]<H+m;
+  const line=(pts,label,edge)=>{
+    if(!pts.some(inside)) return;
+    ctx.beginPath(); pts.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])); ctx.stroke();
+    // 画面のふち（経線は下、緯線は左）と交わる所に数字
+    for(let i=1;i<pts.length;i++){
+      const a=pts[i-1], b=pts[i];
+      if(edge==='b' && (a[1]-H)*(b[1]-H)<=0 && a[1]!==b[1]){ const t=(H-a[1])/(b[1]-a[1]), x=a[0]+(b[0]-a[0])*t; if(x>0&&x<W-60*k){ ctx.fillText(label,x+5*k,H-6*k); break; } }
+      if(edge==='l' && a[0]*b[0]<=0 && a[0]!==b[0]){ const t=-a[0]/(b[0]-a[0]), y=a[1]+(b[1]-a[1])*t; if(y>24*k&&y<H-30*k){ ctx.fillText(label,6*k,y-4*k); break; } }
+    }
+  };
+  const P=cam.P, L0=(P.lon0||135);
+  for(let lon=Math.ceil((L0-180)/10)*10; lon<L0+180; lon+=10){
+    const pts=[]; for(let lat=P.latMin; lat<=80; lat+=1) pts.push(cam.toS(lon,lat));
+    const ln=((lon+540)%360)-180;
+    line(pts, ln<0?(-ln)+'°W':(ln===180?'180°':ln+'°E'), 'b');
+  }
+  for(let lat=Math.ceil(P.latMin/10)*10; lat<=80; lat+=10){
+    const pts=[]; for(let lon=L0-179; lon<=L0+179; lon+=1) pts.push(cam.toS(lon,lat));
+    line(pts, lat>=0?lat+'°N':(-lat)+'°S', 'l');
   }
   ctx.restore();
 }
@@ -1443,10 +1524,29 @@ function pressureSources(st){
       const R=ISO_R[it.type];
       src.push({lon:it.lon,lat:it.lat,A:(it.hpa||1013)-1013,rx:it.isoRx||R,ry:it.isoRy||R,rot:it.isoRot||0,g:it.type==='high',a});
     }else if(it.type==='warp'){
-      src.push({lon:it.lon,lat:it.lat,A:it.dp||0,rx:it.rKm||350,ry:it.rKm||350,rot:0,g:true,a});
+      if(it.kind!=='pull') src.push({lon:it.lon,lat:it.lat,A:it.dp||0,rx:it.rKm||350,ry:it.rKm||350,rot:0,g:true,a});
     }
   }
   return src;
+}
+/* 「ぐいっと」引っぱり点：つかんだ所(alon,alat)の線を、今の所(lon,lat)まで連れてくる */
+function pullsOf(st){
+  return st.items.filter(i=>i.type==='warp' && i.kind==='pull').map(i=>{
+    const a=i._a==null?1:clamp(i._a,0,1);
+    const cs=Math.cos(i.lat*PI/180);
+    let dlon=((i.lon-i.alon+540)%360)-180, dlat=i.lat-i.alat;
+    dlon*=a; dlat*=a;
+    const dKm=Math.hypot(dlon*111.32*cs, dlat*110.57);
+    return {lon:i.lon, lat:i.lat, dlon, dlat, cs, r:Math.max(i.rKm||300, dKm*1.5)};
+  });
+}
+function pullBack(pulls,lon,lat){
+  for(let n=pulls.length-1;n>=0;n--){
+    const q=pulls[n], X=(lon-q.lon)*111.32*q.cs, Y=(lat-q.lat)*110.57;
+    const w=Math.exp(-(X*X+Y*Y)/(q.r*q.r));
+    lon-=w*q.dlon; lat-=w*q.dlat;
+  }
+  return [lon,lat];
 }
 function fieldAt(src,lon,lat){
   let p=1013;
@@ -1461,15 +1561,16 @@ function fieldAt(src,lon,lat){
 /* マーチングスクエアで等圧線をつくり、つながった線（チェーン）にまとめる */
 const isoCache={key:null,val:null};
 function isobarChains(cam,st){
-  const iso=st.isobar||{}, src=pressureSources(st);
-  const key=JSON.stringify([cam.W,cam.H,st.view,iso.interval,src.map(s=>[s.lon,s.lat,s.A,s.rx,s.ry,s.rot,s.a].map(v=>typeof v==='number'?+v.toFixed(4):v))]);
+  const iso=st.isobar||{}, src=pressureSources(st), pulls=pullsOf(st);
+  const key=JSON.stringify([cam.W,cam.H,st.view,cam.P.id,iso.interval,pulls.map(q=>[q.lon,q.lat,q.dlon,q.dlat,q.r].map(v=>+v.toFixed(4))),src.map(s=>[s.lon,s.lat,s.A,s.rx,s.ry,s.rot,s.a].map(v=>typeof v==='number'?+v.toFixed(4):v))]);
   if(isoCache.key===key) return isoCache.val;
   const step=Math.max(6,13*cam.k), nx=Math.ceil(cam.W/step)+3, ny=Math.ceil(cam.H/step)+3, x0=-step, y0=-step;
-  const lons=[], lats=[];
-  for(let i=0;i<nx;i++) lons.push(cam.toLL(x0+i*step,0)[0]);
-  for(let j=0;j<ny;j++) lats.push(cam.toLL(0,y0+j*step)[1]);
   const F=new Float64Array(nx*ny); let mn=Infinity, mxv=-Infinity;
-  for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ const v=fieldAt(src,lons[i],lats[j]); F[j*nx+i]=v; if(v<mn) mn=v; if(v>mxv) mxv=v; }
+  for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){
+    let [lo,la]=cam.toLL(x0+i*step,y0+j*step);
+    if(pulls.length) [lo,la]=pullBack(pulls,lo,la);
+    const v=fieldAt(src,lo,la); F[j*nx+i]=v; if(v<mn) mn=v; if(v>mxv) mxv=v;
+  }
   const itv=iso.interval||4, out=[];
   for(let L=Math.ceil(mn/itv)*itv; L<=mxv; L+=itv){
     const segs=[];
@@ -1594,10 +1695,10 @@ function tweenState(A,B,t){
 /* ---- 全体の描画 ---- */
 const DRAW_ORDER = {isobars:-1, isoline:0, area:0, station:6, cloud:1, typhoon:2, front:3, arrow:4, high:5, low:5, cmark:5, warp:5, icon:6, text:7, ink:8};
 function render(ctx,W,H,st,o={}){
-  const cam = makeCam(st.view,W,H), k=cam.k, time=o.time||0, anim=st.anim!==false;
+  const cam = makeCam(st.view,W,H,projOf(st)), k=cam.k, time=o.time||0, anim=st.anim!==false;
   ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=1;
   ctx.fillStyle='#dfe7ee'; ctx.fillRect(0,0,W,H);
-  const bm = BASEMAPS[st.basemap] ? st.basemap : 'simple', B=BASEMAPS[bm];
+  const bm = baseOf(st), B=BASEMAPS[bm];
   drawBase(ctx,cam,st,B);
   if(st.grid) drawGrid(ctx,cam,!!B.simple);
 
@@ -1942,6 +2043,10 @@ function startOperator(){
   const PREF_COLORS=['#6b7785','#3d4852','#9aa6b2','#2f6fe0','#e03a3a','#2fa84f','#8a3fc0'];
   function renderMapOpts(){
     const M=state.mapOpts;
+    $('proj').value=M.proj||'merc';
+    const lcc=M.proj==='lcc';
+    bmSel.disabled=lcc; bmSel.title=lcc?'ランベルト図法のときは簡略地図だけ使えます':'';
+    if(lcc) bmSel.value='simple'; else bmSel.value=state.basemap;
     $('mBorders').checked=!!M.borders; $('mLakes').checked=!!M.lakes; $('mPref').checked=!!M.pref;
     $('prefBox').style.display=M.pref?'block':'none';
     $('mPrefW').value=M.prefW; $('mPrefWV').textContent=Number(M.prefW).toFixed(1);
@@ -1949,6 +2054,7 @@ function startOperator(){
     $('mPrefCol').querySelectorAll('button').forEach(b=>b.onclick=()=>{ M.prefColor=b.dataset.c; renderMapOpts(); commit(); });
     $('mPrefDash').querySelectorAll('button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='1')===!!M.prefDash));
   }
+  $('proj').onchange=e=>{ state.mapOpts.proj=e.target.value; const P=projOf(state); state.view.lat=clamp(state.view.lat,P.latMin,P.latMax); if(P.id==='lcc') state.view.lon=clamp(((state.view.lon-P.lon0+540)%360)-180+P.lon0,P.lon0-150,P.lon0+150); renderMapOpts(); commit(); toast(P.id==='lcc'?'ランベルト正角円錐図法にしました（背景は簡略地図）':'メルカトル図法にしました'); };
   $('mBorders').onchange=e=>{ state.mapOpts.borders=e.target.checked; commit(); };
   $('mLakes').onchange=e=>{ state.mapOpts.lakes=e.target.checked; commit(); };
   $('mPref').onchange=e=>{ state.mapOpts.pref=e.target.checked; renderMapOpts(); commit(); };
@@ -2151,6 +2257,7 @@ function startOperator(){
 
   /* ---------- 選択中のプロパティ ---------- */
   const TYPE_NAME={high:'高気圧',low:'低気圧',typhoon:'台風',front:'前線',arrow:'矢印・線',ink:'手書きの線',text:'文字',icon:'アイコン',cloud:'雲',area:'範囲',cmark:'丸文字マーク',warp:'ゆがみ点（等圧線）',isoline:'等圧線（線）',isobars:'等圧線（自動）',station:'観測点'};
+  const nameOf=it=>it.type==='warp'&&it.kind==='pull'?'引っぱり点（等圧線）':TYPE_NAME[it.type];
   const LABEL_BASE=[{k:'labelFont',t:'select',label:'文字のフォント',opts:FONT_OPTS,dflt:'gothic'},{k:'labelSize',t:'range',label:'文字の大きさ',min:14,max:120,step:2,dflt:34},{k:'labelColor',t:'color',label:'文字の色'}];
   const LINE_LABEL=[{k:'label',t:'text',label:'文字（梅雨前線 など・空でもOK）',max:40},{k:'labelMode',t:'seg',opts:[['along','線に沿って'],['horiz','横書き']],dflt:'along'},{k:'labelSide',t:'seg',opts:[['1','線の上側'],['-1','線の下側']],dflt:'1'}].concat(LABEL_BASE);
   const CLOUD_LABEL=[{k:'label',t:'text',label:'雲の中の文字（空でもOK）',max:40}].concat(LABEL_BASE);
@@ -2172,7 +2279,8 @@ function startOperator(){
       case 'cloud': return [{k:'widthKm',t:'range',label:'筆の太さ・雲の粒',min:80,max:700,step:10,unit:'km'}].concat(CLOUD_EXTRA).concat(CLOUD_LABEL);
       case 'cmark': return DEFS.cmark;
       case 'station': return DEFS.station;
-      case 'warp': return [{k:'dp',t:'range',label:'ゆがみの強さ（＋ふくらむ／−へこむ）',min:-16,max:16,step:1,unit:'hPa'},{k:'rKm',t:'range',label:'ゆがみの広さ',min:100,max:1200,step:20,unit:'km'}];
+      case 'warp': if(it.kind==='pull') return [{k:'rKm',t:'range',label:'引っぱる広さ（小さいと そこだけ出っぱる）',min:100,max:1500,step:20,unit:'km'}];
+        return [{k:'dp',t:'range',label:'ゆがみの強さ（＋ふくらむ／−へこむ）',min:-16,max:16,step:1,unit:'hPa'},{k:'rKm',t:'range',label:'ゆがみの広さ',min:100,max:1200,step:20,unit:'km'}];
       case 'isoline': return [{k:'level',t:'number',label:'気圧（hPa）20の倍数は太線',min:880,max:1080,step:2},{k:'color',t:'color'},{k:'thick',t:'check',label:'太い線'},{k:'label',t:'check',label:'数字を表示（白丸ドラッグで位置変更）',def:true},{k:'closed',t:'check',label:'閉じた線（輪）'}];
     }
     return [];
@@ -2201,11 +2309,11 @@ function startOperator(){
     let propsEl=propsTarget();
     if(sel.size>1){ renderMulti(propsEl); return; }
     const it=selOne();
-    $('popTitle').textContent= it ? (TYPE_NAME[it.type]||'設定') : '設定';
+    $('popTitle').textContent= it ? (nameOf(it)||'設定') : '設定';
     if(!it){ if(setMode==='side') propsEl.innerHTML='<p class="empty">地図上のものをクリックすると、ここで設定できます。</p>'; return; }
     if(it.type==='isobars'){ renderIsoProps(propsEl); return; }
     const defs=propDefs(it);
-    let h=(setMode==='side'?`<p style="margin:0 0 8px;font-weight:600">${TYPE_NAME[it.type]||''}</p>`:'')+fieldsHTML(defs,it);
+    let h=(setMode==='side'?`<p style="margin:0 0 8px;font-weight:600">${nameOf(it)||''}</p>`:'')+fieldsHTML(defs,it);
     if(it.type==='high'||it.type==='low') h+=`<div class="row"><button class="btn sm" data-act="swap">${it.type==='high'?'低気圧':'高気圧'}に切り替え</button></div>`;
     if(it.type==='front'||it.type==='arrow') h+=`<div class="row"><button class="btn sm" data-act="flip">向きを反転</button></div>`;
     if(it.type==='typhoon'){
@@ -2286,7 +2394,7 @@ function startOperator(){
     cv.width=Math.round(w*dpr()); cv.height=Math.round(h*dpr());
   }
   new ResizeObserver(fit).observe(wrap); fit();
-  const cam=()=>makeCam(state.view,cv.width,cv.height);
+  const cam=()=>makeCam(state.view,cv.width,cv.height,projOf(state));
   function evPos(e){ const r=cv.getBoundingClientRect(); return [(e.clientX-r.left)*cv.width/r.width, (e.clientY-r.top)*cv.height/r.height]; }
 
   /* ---------- 当たり判定 ---------- */
@@ -2431,8 +2539,15 @@ function startOperator(){
   const minPts=it=>(it.type==='area'||(it.type==='cloud'&&it.mode==='lasso')||(it.type==='isoline'&&it.closed))?3:2;
 
   /* ---------- 世界座標での移動 ---------- */
-  const toW=(lon,lat)=>[mx(lon),my(lat)];
-  const fromW=(x,y)=>[ilon(x),ilat(y)];
+  const toW=(lon,lat)=>[PROJ.x(lon,lat),PROJ.y(lon,lat)];
+  const fromW=(x,y)=>PROJ.inv(x,y);
+  // 地図の中心を世界座標で決める（行きすぎないように緯度をおさえる）
+  function setViewW(x,y){
+    let [lon,lat]=PROJ.inv(x,y);
+    if(!(lat>=PROJ.latMin)) lat=PROJ.latMin; if(lat>PROJ.latMax) lat=PROJ.latMax;
+    if(PROJ.id==='lcc') lon=clamp(lon,PROJ.lon0-150,PROJ.lon0+150);
+    state.view.lon=lon; state.view.lat=lat;
+  }
   function screenToW(c,sx,sy){ return [(sx-c.W/2+c.cx)/c.wp, (sy-c.H/2+c.cy)/c.wp]; }
 
   /* ---------- 文字入力 ---------- */
@@ -2478,6 +2593,10 @@ function startOperator(){
     e.preventDefault();
     if(draft){ finishDraft(); return; }
     const [sx,sy]=evPos(e), h=handleHit(sx,sy), it=selOne();
+    const wh=hitTest(sx,sy);
+    if(wh && wh.type==='warp'){   // ゆがみ点・引っぱり点は右クリックで消す
+      pushHistory(); state.items=state.items.filter(i=>i.id!==wh.id); sel.delete(wh.id); renderProps(); commit(); return;
+    }
     if(h && h.k==='v' && it && it.pts.length>minPts(it)){ pushHistory(); it.pts.splice(h.i,1); commit(); }
     else if(h && h.k==='v' && it) toast('これ以上は点を消せません');
     else if(h && h.k==='pv' && it && it.past){   // 台風の過去の経路の点
@@ -2599,13 +2718,20 @@ function startOperator(){
       }
       popClosedKey=null;   // 選んだものをクリックし直したら、閉じた吹き出しをまた開く
       pushHistory();
+      if(hit.type==='isobars' && !e.shiftKey){
+        // 等圧線の線をつかんで「ぐいっと」引っぱる
+        const pl={id:uid(), type:'warp', kind:'pull', alon:lon, alat:lat, lon, lat, rKm:Math.round(clamp(150*c.k/c.pxPerKm(lat),120,1500)/10)*10};
+        state.items.push(pl);
+        drag={mode:'pull', id:pl.id, sx, sy, moved:false};
+        updateCursor(); return;
+      }
       const ids=[...sel], origs=new Map(ids.map(id=>[id,clone(getItem(id))]));
       drag={mode:'move', ids, origs, startW:screenToW(c,sx,sy), moved:false};
     }else if(e.shiftKey){
       drag={mode:'marquee', sx, sy, ex:sx, ey:sy};
     }else{
       select(null);
-      drag={mode:'pan', sx, sy, startW:[mx(state.view.lon),my(state.view.lat)], wp:c.wp};
+      drag={mode:'pan', sx, sy, startW:toW(state.view.lon,state.view.lat), wp:c.wp};
     }
     updateCursor();
   });
@@ -2623,10 +2749,13 @@ function startOperator(){
       return;
     }
     if(drag.mode==='pan'){
-      const nx=drag.startW[0]-(sx-drag.sx)/drag.wp, ny=clamp(drag.startW[1]-(sy-drag.sy)/drag.wp,0.05,0.95);
-      [state.view.lon,state.view.lat]=fromW(nx,ny); commit();
+      setViewW(drag.startW[0]-(sx-drag.sx)/drag.wp, drag.startW[1]-(sy-drag.sy)/drag.wp); commit();
     }else if(drag.mode==='marquee'){
       drag.ex=sx; drag.ey=sy;
+    }else if(drag.mode==='pull'){
+      const it=getItem(drag.id); if(!it) return;
+      if(!drag.moved && Math.hypot(sx-drag.sx,sy-drag.sy)<4*dpr()) return;
+      drag.moved=true; [it.lon,it.lat]=c.toLL(sx,sy); commit();
     }else if(drag.mode==='move'){
       const w=screenToW(c,sx,sy), dx=w[0]-drag.startW[0], dy=w[1]-drag.startW[1];
       for(const id of drag.ids){
@@ -2680,6 +2809,11 @@ function startOperator(){
     }
   });
   const endDrag=()=>{
+    if(drag && drag.mode==='pull'){
+      if(!drag.moved){ state.items=state.items.filter(i=>i.id!==drag.id); popClosedKey=null; renderProps(); }
+      else{ commit(); toast('引っぱり点ができました。紫の点をドラッグで調整、右クリックか Delete で消せます'); }
+      drag=null; updateCursor(); return;
+    }
     if(drag){
       if(drag.mode==='ellipseNew'){
         const it=getItem(drag.id);
@@ -2732,8 +2866,7 @@ function startOperator(){
     const c0=cam(), w=screenToW(c0,sx,sy);
     state.view.z=clamp(state.view.z+dz,4,10);
     const wp=256*Math.pow(2,state.view.z)*(cv.height/REF_H);
-    const ncx=w[0]-(sx-cv.width/2)/wp, ncy=clamp(w[1]-(sy-cv.height/2)/wp,0.05,0.95);
-    [state.view.lon,state.view.lat]=fromW(ncx,ncy);
+    setViewW(w[0]-(sx-cv.width/2)/wp, w[1]-(sy-cv.height/2)/wp);
     commit();
   }
   function finishDraft(closed){
@@ -2835,14 +2968,14 @@ function startOperator(){
     return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
   }
   $('png').onclick=async()=>{
-    const W=1920, H=1080, c=makeCam(state.view,W,H);
+    const W=1920, H=1080, c=makeCam(state.view,W,H,projOf(state));
     toast('画像を作っています…');
     const off=document.createElement('canvas'); off.width=W; off.height=H;
     const octx=off.getContext('2d');
     render(octx,W,H,state,{time:performance.now()/1000});   // 使うフォントの読み込みを促す
     const waits=[artReady, symReady, ...fontPending];
-    if(BASEMAPS[state.basemap].simple){ for(const n of ['land50','land10','borders']){ const p=loadMapData(n); if(p) waits.push(p); } }
-    for(const ts of baseTilesets(state.basemap)) waits.push(...visibleTiles(c,ts).map(t=>getTile(ts,t.z,t.xx,t.y).p));
+    if(BASEMAPS[baseOf(state)].simple){ for(const n of ['land50','land10','borders']){ const p=loadMapData(n); if(p) waits.push(p); } }
+    for(const ts of baseTilesets(baseOf(state))) waits.push(...visibleTiles(c,ts).map(t=>getTile(ts,t.z,t.xx,t.y).p));
     await Promise.race([Promise.all(waits), new Promise(r=>setTimeout(r,6000))]);
     render(octx,W,H,state,{time:performance.now()/1000});
     try{
@@ -2903,6 +3036,16 @@ function startOperator(){
     if(state.isobar && state.isobar.on){
       for(const w of state.items.filter(i=>i.type==='warp')){
         const [x,y]=c.toS(w.lon,w.lat), r=(w.rKm||350)*c.pxPerKm(w.lat), on=sel.has(w.id);
+        if(w.kind==='pull'){
+          const [ax,ay]=c.toS(w.alon,w.alat);
+          ctx.setLineDash([5*d,5*d]); ctx.lineWidth=(on?2:1.2)*d; ctx.strokeStyle=on?'#7c3aed':'rgba(124,58,237,.45)';
+          if(on){ ctx.beginPath(); ctx.arc(x,y,r,0,2*PI); ctx.stroke(); }
+          ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(x,y); ctx.stroke(); ctx.setLineDash([]);
+          ctx.beginPath(); ctx.arc(ax,ay,4*d,0,2*PI); ctx.fillStyle='rgba(124,58,237,.6)'; ctx.fill();
+          ctx.beginPath(); ctx.arc(x,y,10*d,0,2*PI); ctx.fillStyle='#7c3aed'; ctx.fill();
+          ctx.lineWidth=2*d; ctx.strokeStyle='#fff'; ctx.beginPath(); ctx.arc(x,y,4*d,0,2*PI); ctx.stroke();
+          continue;
+        }
         ctx.setLineDash([5*d,5*d]); ctx.lineWidth=(on?2:1.2)*d; ctx.strokeStyle=on?'#7c3aed':'rgba(124,58,237,.55)';
         ctx.beginPath(); ctx.arc(x,y,r,0,2*PI); ctx.stroke(); ctx.setLineDash([]);
         ctx.beginPath(); ctx.arc(x,y,11*d,0,2*PI); ctx.fillStyle='#7c3aed'; ctx.fill();
