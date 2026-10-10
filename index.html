@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.17</title>
+<title>天気図スタジオ v0.18</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -120,7 +120,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.17 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.18 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -440,24 +440,53 @@ function loadMapData(name){
     .then(r=>r.json())
     .then(topo=>{
       const p=new Path2D();
+      // 日付変更線（経度180度）をまたぐ線は、経度をつなげて（190度…のように）描く
+      const unwrap=ring=>{
+        let off=0, prev=null; const out=[];
+        for(const c of ring){
+          let lon=c[0]+off;
+          if(prev!=null){ while(lon-prev>180){ off-=360; lon-=360; } while(lon-prev<-180){ off+=360; lon+=360; } }
+          out.push([lon,c[1],c[0]]); prev=lon;
+        }
+        return out;
+      };
+      const meanLon=r=>r.reduce((a,c)=>a+c[0],0)/r.length;
+      const variants=r=>{ const u=unwrap(r); return u.some(c=>c[0]<-100) ? [u, u.map(c=>[c[0]+360,c[1],c[2]])] : [u]; };
+      const ps=new Path2D();   // 海岸線（ふち線）用：180度の切れ目は描かない
+      const seam=c=>Math.abs(c[2]??c[0])>179.99;
+      const draw=(r,close)=>{
+        r.forEach((c,i)=>{ const X=mx(c[0])*LS,Y=my(c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); if(close) p.closePath();
+        const n=r.length, segs=close?n:n-1; let pen=false;
+        for(let i=0;i<segs;i++){
+          const a=r[i], b=r[(i+1)%n];
+          if(seam(a)&&seam(b)){ pen=false; continue; }
+          if(!pen){ ps.moveTo(mx(a[0])*LS,my(a[1])*LS); pen=true; }
+          ps.lineTo(mx(b[0])*LS,my(b[1])*LS);
+        }
+      };
       if(name==='borders'){
         const mesh=topojson.mesh(topo, topo.objects.countries, (a,b)=>a!==b);
-        for(const line of mesh.coordinates){ if(!inRegion(line,60,-15,200,75)) continue; line.forEach((c,i)=>{ const X=mx(c[0])*LS,Y=my(c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); }
+        for(const line of mesh.coordinates) for(const v of variants(line)){ if(inRegion(v,60,-15,260,80)) draw(v,false); }
       }else{
         const geo=topojson.feature(topo, topo.objects.land);
-        const addRing=ring=>{ ring.forEach((c,i)=>{ const X=mx(c[0])*LS,Y=my(c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); p.closePath(); };
         const feats=geo.type==='FeatureCollection'?geo.features:[geo];
         for(const f of feats){
           const g=f.geometry; if(!g) continue;
           const polys=g.type==='Polygon'?[g.coordinates]:g.coordinates;
           for(const poly of polys){
-            // 10m は東アジア〜太平洋あたりだけ使う（軽くするため）
-            if(name==='land10' && !inRegion(poly[0],85,-12,190,70)) continue;
-            poly.forEach(addRing);
+            const south=poly[0].some(c=>c[1]<-60);   // 南極はそのまま
+            if(south){ if(name!=='land10') poly.forEach(r=>draw(r,true)); continue; }
+            const outer=variants(poly[0]);
+            outer.forEach((o,vi)=>{
+              // 10m は東アジア〜太平洋あたりだけ使う（軽くするため）
+              if(name==='land10' && !inRegion(o,85,-12,260,80)) return;
+              draw(o,true);
+              for(const hole of poly.slice(1)){ let h=unwrap(hole); const dm=meanLon(o)-meanLon(h); h=h.map(c=>[c[0]+Math.round(dm/360)*360,c[1],c[2]]); draw(h,true); }
+            });
           }
         }
       }
-      MAPDATA[name]=p;
+      MAPDATA[name]=p; MAPDATA[name+'_line']=ps;
     })
     .catch(e=>{ console.warn('map load failed',name,e); mapLoading[name]=null; });
   return mapLoading[name];
@@ -467,18 +496,18 @@ const DEF_MAPOPTS={borders:true, lakes:true, pref:false, prefW:1.2, prefColor:'#
 const mapOptsOf=st=>Object.assign({},DEF_MAPOPTS,st.mapOpts||{});
 function landFor(cam){
   const want10 = cam.wp/(cam.H/REF_H) > 256*Math.pow(2,4.6);
-  if(want10){ loadMapData('land10'); if(MAPDATA.land10) return MAPDATA.land10; }
+  if(want10){ loadMapData('land10'); if(MAPDATA.land10) return [MAPDATA.land10,MAPDATA.land10_line]; }
   loadMapData('land50');
-  return MAPDATA.land50;
+  return MAPDATA.land50 ? [MAPDATA.land50,MAPDATA.land50_line] : null;
 }
 function drawSimple(ctx,cam,st,withLakes){
   ctx.fillStyle='#e9f1f7'; ctx.fillRect(0,0,cam.W,cam.H);
-  const land=landFor(cam); if(!land) return;
+  const LL=landFor(cam); if(!LL) return; const [land,landLine]=LL;
   const s=cam.wp/LS, M=mapOptsOf(st);
   ctx.save();
   ctx.setTransform(s,0,0,s,cam.W/2-cam.cx,cam.H/2-cam.cy);
   ctx.fillStyle='#fbf8ef'; ctx.fill(land);
-  ctx.lineJoin='round'; ctx.lineWidth=1.5*cam.k/s; ctx.strokeStyle='#3d4852'; ctx.stroke(land);
+  ctx.lineJoin='round'; ctx.lineWidth=1.5*cam.k/s; ctx.strokeStyle='#3d4852'; ctx.stroke(landLine);
   if(withLakes && M.lakes){ ctx.fillStyle='#e9f1f7'; ctx.fill(lakePath); ctx.lineWidth=1.1*cam.k/s; ctx.stroke(lakePath); }
   ctx.restore();
 }
@@ -489,7 +518,7 @@ function drawMapLines(ctx,cam,st,simple){
   ctx.lineJoin='round'; ctx.lineCap='round';
   if(simple && M.borders){
     loadMapData('borders');
-    if(MAPDATA.borders){ ctx.setLineDash([6*k/s,4*k/s]); ctx.lineWidth=1.3*k/s; ctx.strokeStyle='#5d6b7a'; ctx.stroke(MAPDATA.borders); ctx.setLineDash([]); }
+    if(MAPDATA.borders_line){ ctx.setLineDash([6*k/s,4*k/s]); ctx.lineWidth=1.3*k/s; ctx.strokeStyle='#5d6b7a'; ctx.stroke(MAPDATA.borders_line); ctx.setLineDash([]); }
   }
   if(M.pref){
     ctx.setLineDash(M.prefDash?[5*k/s,4*k/s]:[]);
