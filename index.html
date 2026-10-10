@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.14</title>
+<title>天気図スタジオ v0.16</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -120,7 +120,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.14 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.16 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -842,7 +842,7 @@ function fcTimeLabel(it,h){
 }
 /* 円をつないだ形（となり同士の円を包む形の和）のふちだけを描く */
 const warnLayers=new Map();
-function strokeUnionOfHulls(ctx,cam,circles,color,lw){
+function strokeUnionOfHulls(ctx,cam,circles,color,lw,dash,under){
   if(!circles.length) return;
   const key=cam.W+'x'+cam.H;
   let L=warnLayers.get(key);
@@ -865,7 +865,11 @@ function strokeUnionOfHulls(ctx,cam,circles,color,lw){
       if(c.length===1) break;
     }
   };
-  g.lineJoin='round'; g.strokeStyle=color; g.lineWidth=lw*2; shape(circles); g.stroke();
+  g.lineJoin='round';
+  if(dash) g.setLineDash(dash.map(v=>v));
+  if(under){ g.strokeStyle=under; g.lineWidth=lw*2+3*cam.k; shape(circles); g.stroke(); }
+  g.strokeStyle=color; g.lineWidth=lw*2; shape(circles); g.stroke();
+  g.setLineDash([]);
   g.globalCompositeOperation='destination-out'; g.fillStyle='#000'; shape(circles); g.fill();
   g.globalCompositeOperation='source-over';
   ctx.drawImage(L,0,0);
@@ -893,25 +897,18 @@ function drawTrack(ctx,cam,it){
     if(it.showWarn!==false){
       const ppk=cam.pxPerKm(it.lat);
       const wc=[[cur[0],cur[1],(it.stormKm||0)*ppk]].concat(rest.map(f=>{ const [x,y]=cam.toS(f.lon,f.lat); return [x,y,((f.rKm||150)+(it.stormKm||0))*cam.pxPerKm(f.lat)]; }));
-      strokeUnionOfHulls(ctx,cam,wc.filter(c=>c[2]>0.5),'#d01515',3*k);
+      strokeUnionOfHulls(ctx,cam,wc.filter(c=>c[2]>0.5),'#e01b1b',3.6*k);
     }
-    // 予報円（白の点線）
+    // 予報円（灰色の点線）と、中心から予報円へつながる点線（ろうと型）
+    const dash=[11*k,8*k];
+    strokeUnionOfHulls(ctx,cam,[[cur[0],cur[1],0]].concat(C.map(c=>[c[0],c[1],c[2]])),'#6b7785',2.6*k,dash,null);
     for(const [x,y,r] of C){
       ctx.beginPath(); ctx.arc(x,y,r,0,2*PI);
-      ctx.fillStyle='rgba(255,255,255,.18)'; ctx.fill();
-      ctx.setLineDash([]); ctx.strokeStyle='rgba(40,52,64,.55)'; ctx.lineWidth=5*k; ctx.stroke();
-      ctx.setLineDash([9*k,7*k]); ctx.strokeStyle='#ffffff'; ctx.lineWidth=2.6*k; ctx.stroke();
+      ctx.setLineDash(dash); ctx.strokeStyle='#6b7785'; ctx.lineWidth=2.6*k; ctx.stroke();
     }
     ctx.setLineDash([]);
-    // 中心を結ぶ点線
-    const line=[cur].concat(C.map(c=>[c[0],c[1]]));
-    ctx.setLineDash([3*k,7*k]);
-    for(const [w,col] of [[6*k,halo],[2.6*k,'#1d2733']]){ ctx.strokeStyle=col; ctx.lineWidth=w; ctx.beginPath(); line.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])); ctx.stroke(); }
-    ctx.setLineDash([]);
-    // 中心の＋と日時
+    // 日時
     for(const [x,y,r,f] of C){
-      const c=6*k;
-      for(const [w,col] of [[6*k,halo],[2.4*k,'#1d2733']]){ ctx.strokeStyle=col; ctx.lineWidth=w; ctx.beginPath(); ctx.moveTo(x-c,y); ctx.lineTo(x+c,y); ctx.moveTo(x,y-c); ctx.lineTo(x,y+c); ctx.stroke(); }
       if(it.showFcLabel!==false){
         ctx.font=`700 ${20*k}px ${JP_FONT}`; ctx.textAlign='left'; ctx.textBaseline='middle';
         haloText(ctx,fcTimeLabel(it,f.h||0),x+r*0.72+6*k,y-r*0.72-4*k,'#1d2733','rgba(255,255,255,.95)',5*k);
@@ -926,15 +923,12 @@ function drawTyphoon(ctx,cam,it,time){
   const [x,y]=cam.toS(it.lon,it.lat), k=cam.k, ppk=cam.pxPerKm(it.lat);
   const rs=it.strongKm*ppk, rb=it.stormKm*ppk;
   ctx.save();
-  if(rs>1){
-    ctx.beginPath(); ctx.arc(x,y,rs,0,2*PI);
-    ctx.fillStyle='rgba(255,214,10,.22)'; ctx.fill();
-    ctx.lineWidth=3*k; ctx.strokeStyle='#e0a800'; ctx.stroke();
-  }
-  if(rb>1){
-    ctx.beginPath(); ctx.arc(x,y,rb,0,2*PI);
-    ctx.fillStyle='rgba(225,30,30,.25)'; ctx.fill();
-    ctx.lineWidth=3*k; ctx.strokeStyle='#cf1717'; ctx.stroke();
+  // ③強風域（黄）・②暴風域（赤）：線で描く（塗りはオプション）
+  for(const [r,fill,col] of [[rs,'rgba(255,214,10,.22)','#f2c200'],[rb,'rgba(225,30,30,.22)','#e01b1b']]){
+    if(r<=1) continue;
+    ctx.beginPath(); ctx.arc(x,y,r,0,2*PI);
+    if(it.fillAreas){ ctx.fillStyle=fill; ctx.fill(); }
+    ctx.lineWidth=5*k; ctx.strokeStyle=col; ctx.stroke();
   }
   ctx.restore();
   ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -967,7 +961,7 @@ function drawTyphoon(ctx,cam,it,time){
   }else{
     const c=11*k;
     ctx.lineCap='round';
-    for(const [w,s] of [[9*k,'rgba(255,255,255,.9)'],[4.5*k,'#d01515']]){
+    for(const [w,s] of [[10*k,'rgba(255,255,255,.9)'],[5.5*k,'#1d2733']]){
       ctx.strokeStyle=s; ctx.lineWidth=w;
       ctx.beginPath(); ctx.moveTo(x-c,y-c); ctx.lineTo(x+c,y+c); ctx.moveTo(x+c,y-c); ctx.lineTo(x-c,y+c); ctx.stroke();
     }
@@ -2139,7 +2133,7 @@ function startOperator(){
         .concat(it.past&&it.past.length ? [{k:'showPast',t:'check',label:'過去の経路を表示',def:true}] : [])
         .concat([STYLE_SEL,CHAR_DEF(it),FONT_SEL,{k:'showName',t:'check',label:'「台風○号」を表示',def:true},{k:'showSpin',t:'check',label:'ぐるぐるを表示（天気図風のとき）',def:true},{k:'showHpa',t:'check',label:'気圧の数字を表示'},
         {k:'no',t:'number',label:'台風の番号（号）',min:1,max:40},{k:'hpa',t:'number',label:'中心気圧（hPa）',min:870,max:1010},
-        {k:'stormKm',t:'range',label:'暴風域（赤）半径',min:0,max:500,step:10,unit:'km'},{k:'strongKm',t:'range',label:'強風域（黄）半径',min:0,max:1200,step:10,unit:'km'},{k:'size',t:'range',label:'丸囲みの大きさ',min:36,max:200,step:2}]);
+        {k:'fillAreas',t:'check',label:'暴風域・強風域をうすく塗る'},{k:'stormKm',t:'range',label:'暴風域（赤）半径',min:0,max:500,step:10,unit:'km'},{k:'strongKm',t:'range',label:'強風域（黄）半径',min:0,max:1200,step:10,unit:'km'},{k:'size',t:'range',label:'丸囲みの大きさ',min:36,max:200,step:2}]);
       case 'icon': return [{k:'size',t:'range',label:'大きさ',min:20,max:400,step:2}];
       case 'front': return [{k:'kind',t:'select',label:'前線の種類',opts:Object.entries(FRONTS).map(([k2,f])=>[k2,f.name])}].concat(LINE_LABEL);
       case 'arrow': return DEFS.arrow.concat(LINE_LABEL);
@@ -2716,6 +2710,7 @@ function startOperator(){
         if(draft.kind==='fc'){
           it.fc=draft.pts.map((p,i)=>({lon:p[0],lat:p[1],h:FC_HOURS[i],rKm:FC_RKM[i]}));
           it.fcOrigin=[it.lon,it.lat]; it.passed=0;
+          if(it.style!=='circle') it.showSpin=false;   // 進路図では中心は ×
           if(!it.t0){ const d=new Date(); d.setMinutes(0,0,0); const p2=n=>String(n).padStart(2,'0'); it.t0=`${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}T${p2(d.getHours())}:00`; }
         }else{
           it.past=draft.pts.slice();
