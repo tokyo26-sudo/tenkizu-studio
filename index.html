@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.19</title>
+<title>天気図スタジオ v0.20</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -120,7 +120,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.19 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.20 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -1670,7 +1670,7 @@ function drawIsoline(ctx,cam,it){
 
 /* ---- シーン切り替えの途中の絵（A→B を t で補間） ---- */
 const easeIO=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
-const TW_KEYS=['labelPos','labelSize','lon','lat','size','stormKm','strongKm','rxKm','ryKm','rot','widthKm','width','alpha','hpa','isoRx','isoRy','isoRot','dp','rKm'];
+const TW_KEYS=['op','fadeW','labelPos','labelSize','lon','lat','size','stormKm','strongKm','rxKm','ryKm','rot','widthKm','width','alpha','hpa','isoRx','isoRy','isoRot','dp','rKm'];
 const GROWS=['front','arrow','ink'];
 function tweenState(A,B,t){
   const out=Object.assign({},B);
@@ -1694,6 +1694,66 @@ function tweenState(A,B,t){
 
 /* ---- 全体の描画 ---- */
 const DRAW_ORDER = {isobars:-1, isoline:0, area:0, station:6, cloud:1, typhoon:2, front:3, arrow:4, high:5, low:5, cmark:5, warp:5, icon:6, text:7, ink:8};
+/* ---- 濃さ・片側をうすく ---- */
+const FADE_DIRS={r:[1,0],l:[-1,0],u:[0,-1],d:[0,1],ur:[0.7071,-0.7071],ul:[-0.7071,-0.7071],dr:[0.7071,0.7071],dl:[-0.7071,0.7071]};
+const opOf=it=>it.op==null?100:it.op;
+const needsLayer=it=>opOf(it)<99.5 || !!FADE_DIRS[it.fade];
+function itemExtent(cam,it){
+  const k=cam.k; let xs=[], ys=[], pad=20*k;
+  const add=(lon,lat,r)=>{ const [x,y]=cam.toS(lon,lat); xs.push(x-r,x+r); ys.push(y-r,y+r); };
+  if(it.type==='area' && it.shape==='ellipse'){ add(it.lon,it.lat,Math.max(it.rxKm,it.ryKm)*cam.pxPerKm(it.lat)); }
+  else if(it.pts && it.pts.length){
+    if(it.type==='cloud') pad=(it.widthKm||260)*cam.pxPerKm(it.pts[0][1])/2+8*k;
+    else if(it.type==='arrow') pad=(it.width||12)*k*2;
+    else if(it.type==='front') pad=26*k;
+    else if(it.type==='ink') pad=(it.width||6)*k;
+    for(const q of it.pts) add(q[0],q[1],pad);
+  }else if(it.lon!=null){
+    let r=60*k;
+    if(it.type==='typhoon'){
+      r=Math.max(70*k,(Math.max(it.stormKm||0,it.strongKm||0))*cam.pxPerKm(it.lat));
+      if(it.fc && it.showFc!==false) for(const f of it.fc) add(f.lon,f.lat,((f.rKm||150)+(it.stormKm||0))*cam.pxPerKm(f.lat));
+      if(it.past) for(const q of it.past) add(q[0],q[1],10*k);
+    }
+    else if(it.type==='icon'||it.type==='cmark') r=(it.size||72)*k/2;
+    else if(it.type==='text'){
+      const s=(it.size||48)*k, lines=String(it.text||'').split('\n');
+      const w=Math.max(...lines.map(l=>l.length))*s/2+s*0.3;
+      const [x,y]=cam.toS(it.lon,it.lat), h=lines.length*s*1.25/2;
+      xs.push(x-w,x+w); ys.push(y-h,y+h);
+    }
+    else if(it.type==='high'||it.type==='low') r=Math.max(60*k,(it.size||72)*k/2);
+    if(it.type!=='text') add(it.lon,it.lat,r);
+  }
+  if(!xs.length) return [0,0,cam.W,cam.H];
+  return [Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)];
+}
+const layerCache=new Map();
+function getLayer(W,H){
+  const key=W+'x'+H; let c=layerCache.get(key);
+  if(!c){ c=document.createElement('canvas'); c.width=W; c.height=H; if(layerCache.size>4) layerCache.clear(); layerCache.set(key,c); }
+  return c;
+}
+/* その絵だけ裏の紙に描いて、グラデーションで切り抜いてから貼る */
+function drawLayered(ctx,cam,it,drawFn){
+  const a=(opOf(it)/100)*(it._a==null?1:clamp(it._a,0,1));
+  if(a<=0.003) return;
+  const W=cam.W, H=cam.H, L=getLayer(W,H), g=L.getContext('2d');
+  g.setTransform(1,0,0,1,0,0); g.globalCompositeOperation='source-over'; g.globalAlpha=1; g.clearRect(0,0,W,H);
+  g.save(); drawFn(g); g.restore();
+  const d=FADE_DIRS[it.fade];
+  if(d){
+    const [x0,y0,x1,y1]=itemExtent(cam,it);
+    const cx=(x0+x1)/2, cy=(y0+y1)/2, half=Math.max(4,(Math.abs(d[0])*(x1-x0)+Math.abs(d[1])*(y1-y0))/2);
+    const w=clamp((it.fadeW==null?60:it.fadeW)/100,0.05,1)*2*half;
+    const ex=cx+d[0]*half, ey=cy+d[1]*half;
+    const gr=g.createLinearGradient(ex-d[0]*w,ey-d[1]*w,ex,ey);
+    gr.addColorStop(0,'rgba(0,0,0,1)'); gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.setTransform(1,0,0,1,0,0); g.globalCompositeOperation='destination-in'; g.fillStyle=gr; g.fillRect(0,0,W,H);
+    g.globalCompositeOperation='source-over';
+  }
+  ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=a; ctx.drawImage(L,0,0); ctx.restore();
+}
 function render(ctx,W,H,st,o={}){
   const cam = makeCam(st.view,W,H,projOf(st)), k=cam.k, time=o.time||0, anim=st.anim!==false;
   ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=1;
@@ -1709,18 +1769,23 @@ function render(ctx,W,H,st,o={}){
   const erasers=items.filter(i=>i.type==='cloud' && i.mode==='erase');
   for(let n=0;n<items.length;){
     const it=items[n];
-    if(it.type==='cloud'){   // 続いて並んでいる雲は、1つにつなげて描く
+    if(it.type==='cloud'){   // 続いて並んでいる雲は、1つにつなげて描く（濃さを変えた雲は1つずつ）
       const run=[];
-      while(n<items.length && items[n].type==='cloud'){ if(items[n].mode!=='erase') run.push(items[n]); n++; }
-      if(run.length) drawClouds(ctx,cam,run,erasers,time,anim);
+      const flush=()=>{ if(run.length) drawClouds(ctx,cam,run.splice(0),erasers,time,anim); };
+      while(n<items.length && items[n].type==='cloud'){
+        const c=items[n]; n++;
+        if(c.mode==='erase') continue;
+        if(needsLayer(c)){ flush(); drawLayered(ctx,cam,c,g=>drawClouds(g,cam,[Object.assign({},c,{_a:1})],erasers,time,anim)); }
+        else run.push(c);
+      }
+      flush();
       continue;
     }
     n++;
     if(it.type==='warp') continue;
     if(it.type==='isobars'){ if(isoOn){ ctx.save(); ctx.globalAlpha=it._a==null?1:clamp(it._a,0,1); drawIsobars(ctx,cam,st,isoAvoid()); ctx.restore(); } continue; }
-    ctx.save();
-    ctx.globalAlpha = it._a==null ? 1 : clamp(it._a,0,1);
     const grow = it._grow==null ? 1 : clamp(it._grow,0,1);
+    const body=ctx=>{
     if(it.type==='front'||it.type==='arrow'){
       const sp=it.pts.map(p=>cam.toS(p[0],p[1]));
       if(it.type==='front') drawFrontScreen(ctx,k,sp,it.kind,grow); else drawArrowScreen(ctx,k,sp,it,grow);
@@ -1739,6 +1804,11 @@ function render(ctx,W,H,st,o={}){
     else if(it.type==='cmark') drawCMark(ctx,cam,it);
     else if(it.type==='isoline') drawIsoline(ctx,cam,it);
     else if(it.type==='station') drawStation(ctx,cam,it);
+    };
+    if(needsLayer(it)){ drawLayered(ctx,cam,it,body); continue; }
+    ctx.save();
+    ctx.globalAlpha = it._a==null ? 1 : clamp(it._a,0,1);
+    body(ctx);
     ctx.restore();
   }
   ctx.globalAlpha=1;
@@ -2257,6 +2327,10 @@ function startOperator(){
 
   /* ---------- 選択中のプロパティ ---------- */
   const TYPE_NAME={high:'高気圧',low:'低気圧',typhoon:'台風',front:'前線',arrow:'矢印・線',ink:'手書きの線',text:'文字',icon:'アイコン',cloud:'雲',area:'範囲',cmark:'丸文字マーク',warp:'ゆがみ点（等圧線）',isoline:'等圧線（線）',isobars:'等圧線（自動）',station:'観測点'};
+  const FADE_OPTS=[['none','なし'],['r','→ 右へ'],['l','← 左へ'],['u','↑ 上へ'],['d','↓ 下へ'],['ur','↗ 右上へ'],['ul','↖ 左上へ'],['dr','↘ 右下へ'],['dl','↙ 左下へ']];
+  const FADE_DEFS=[{k:'op',t:'range',label:'濃さ',min:0,max:100,step:5,unit:'%',dflt:100},
+    {k:'fade',t:'select',label:'片側をうすく（うすくなっていく向き）',opts:FADE_OPTS,dflt:'none'},
+    {k:'fadeW',t:'range',label:'うすくなる幅',min:10,max:100,step:5,unit:'%',dflt:60,when:o=>!!FADE_DIRS[o.fade]}];
   const nameOf=it=>it.type==='warp'&&it.kind==='pull'?'引っぱり点（等圧線）':TYPE_NAME[it.type];
   const LABEL_BASE=[{k:'labelFont',t:'select',label:'文字のフォント',opts:FONT_OPTS,dflt:'gothic'},{k:'labelSize',t:'range',label:'文字の大きさ',min:14,max:120,step:2,dflt:34},{k:'labelColor',t:'color',label:'文字の色'}];
   const LINE_LABEL=[{k:'label',t:'text',label:'文字（梅雨前線 など・空でもOK）',max:40},{k:'labelMode',t:'seg',opts:[['along','線に沿って'],['horiz','横書き']],dflt:'along'},{k:'labelSide',t:'seg',opts:[['1','線の上側'],['-1','線の下側']],dflt:'1'}].concat(LABEL_BASE);
@@ -2312,7 +2386,7 @@ function startOperator(){
     $('popTitle').textContent= it ? (nameOf(it)||'設定') : '設定';
     if(!it){ if(setMode==='side') propsEl.innerHTML='<p class="empty">地図上のものをクリックすると、ここで設定できます。</p>'; return; }
     if(it.type==='isobars'){ renderIsoProps(propsEl); return; }
-    const defs=propDefs(it);
+    const defs=propDefs(it).concat(it.type==='warp'?[]:FADE_DEFS);
     let h=(setMode==='side'?`<p style="margin:0 0 8px;font-weight:600">${nameOf(it)||''}</p>`:'')+fieldsHTML(defs,it);
     if(it.type==='high'||it.type==='low') h+=`<div class="row"><button class="btn sm" data-act="swap">${it.type==='high'?'低気圧':'高気圧'}に切り替え</button></div>`;
     if(it.type==='front'||it.type==='arrow') h+=`<div class="row"><button class="btn sm" data-act="flip">向きを反転</button></div>`;
@@ -2326,7 +2400,7 @@ function startOperator(){
     if(it.type!=='warp') h+=Z_ROW;
     h+=`<div class="row"><button class="btn sm" data-act="copy">コピー</button><button class="btn sm danger" data-act="del">削除</button></div>`;
     propsEl.innerHTML=h; bindZ(propsEl);
-    bindFields(propsEl,it,defs,(k)=>{ normalize(it); commit(); if(k==='style'||k==='precip') renderProps(); },true);
+    bindFields(propsEl,it,defs,(k)=>{ normalize(it); commit(); if(k==='style'||k==='precip'||k==='fade') renderProps(); },true);
     propsEl.querySelectorAll('[data-act]').forEach(el=>el.onclick=()=>{
       const a=el.dataset.act;
       if(a==='del') removeSel();
@@ -2360,10 +2434,17 @@ function startOperator(){
     h+=`<p class="note">選んだものはまとめてドラッグで動かせます。</p>`;
     if(hasFont) h+=`<label class="f">フォント（まとめて）<select id="mFont"><option value="">— 選ぶ —</option>${FONT_OPTS.map(([k,n])=>`<option value="${k}">${n}</option>`).join('')}</select></label>`;
     if(hasColor) h+=`<div style="font-size:12px;color:var(--sub);margin-bottom:3px">色（まとめて：文字・矢印・手書き・範囲）</div><div class="sw" id="mColor">${COLORS.map(c=>`<button data-c="${c}" style="background:${c}"></button>`).join('')}</div>`;
+    { const ops=items.map(opOf), same=ops.every(v=>v===ops[0]);
+      h+=`<label class="f">濃さ（まとめて）：<b id="mOpV">${same?ops[0]:'—'}</b>%<input type="range" id="mOp" min="0" max="100" step="5" value="${same?ops[0]:100}"></label>`;
+      h+=`<label class="f">片側をうすく（まとめて）<select id="mFade"><option value="">— 選ぶ —</option>${FADE_OPTS.map(([k,n])=>`<option value="${k}">${n}</option>`).join('')}</select></label>`; }
     h+=`<div class="row"><span style="font-size:12px;color:var(--sub)">大きさ（まとめて）</span><button class="btn sm" id="mSmall">小さく</button><button class="btn sm" id="mBig">大きく</button></div>`;
     h+=Z_ROW;
     h+=`<div class="row"><button class="btn sm" id="mCopy">コピー</button><button class="btn sm danger" id="mDel">まとめて削除</button><button class="btn sm" id="mNone">選択解除</button></div>`;
     propsEl.innerHTML=h; bindZ(propsEl);
+    { const r=$('mOp'), fd=$('mFade');
+      r.addEventListener('pointerdown',pushHistory);
+      r.oninput=()=>{ const v=parseFloat(r.value); items.forEach(i=>i.op=v); $('mOpV').textContent=v; commit(); };
+      fd.onchange=()=>{ if(!fd.value) return; pushHistory(); items.forEach(i=>{ i.fade=fd.value; if(i.fadeW==null) i.fadeW=60; }); commit(); }; }
     const f=$('mFont'); if(f) f.onchange=()=>{ if(!f.value) return; pushHistory(); items.filter(i=>FONT_TYPES.includes(i.type)).forEach(i=>i.font=f.value); items.filter(i=>['front','arrow','cloud'].includes(i.type)).forEach(i=>i.labelFont=f.value); commit(); };
     propsEl.querySelectorAll('#mColor [data-c]').forEach(b=>b.onclick=()=>{ pushHistory(); items.filter(i=>COLOR_TYPES.includes(i.type)).forEach(i=>i.color=b.dataset.c); commit(); });
     const scale=m=>{
@@ -2398,11 +2479,13 @@ function startOperator(){
   function evPos(e){ const r=cv.getBoundingClientRect(); return [(e.clientX-r.left)*cv.width/r.width, (e.clientY-r.top)*cv.height/r.height]; }
 
   /* ---------- 当たり判定 ---------- */
+  // ゆがみ点・引っぱり点は、等圧線（かゆがみ点）を選んでいるときだけ見える・つかめる
+  const warpVisible=()=>!!(state.isobar && state.isobar.on) && (tool==='warp' || sel.has('isobars') || [...sel].some(id=>{ const i=getItem(id); return i && i.type==='warp'; }));
   function hitTest(sx,sy){
     const c=cam(), k=c.k, tol=10*dpr(), P=[sx,sy];
     const items=state.items.slice().reverse();   // 上に重なっているものから
     const isoOn=state.isobar && state.isobar.on;
-    if(isoOn) for(const it of items){ if(it.type==='warp'){ const [x,y]=c.toS(it.lon,it.lat); if(Math.hypot(sx-x,sy-y)<14*dpr()) return it; } }
+    if(isoOn && warpVisible()) for(const it of items){ if(it.type==='warp'){ const [x,y]=c.toS(it.lon,it.lat); if(Math.hypot(sx-x,sy-y)<14*dpr()) return it; } }
     for(const it of items){
       if(it.type==='warp') continue;
       if(it.type==='isobars'){
@@ -3032,8 +3115,8 @@ function startOperator(){
       for(const ch of isobarChains(c,state)){ ctx.beginPath(); ch.pts.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])); ctx.stroke(); }
       ctx.restore();
     }
-    // ゆがみ点（操作画面だけに見える）
-    if(state.isobar && state.isobar.on){
+    // ゆがみ点（操作画面だけに見える。等圧線を選んでいるときだけ）
+    if(warpVisible()){
       for(const w of state.items.filter(i=>i.type==='warp')){
         const [x,y]=c.toS(w.lon,w.lat), r=(w.rKm||350)*c.pxPerKm(w.lat), on=sel.has(w.id);
         if(w.kind==='pull'){
