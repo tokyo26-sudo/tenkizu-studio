@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.22</title>
+<title>天気図スタジオ v0.23</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -122,11 +122,12 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.22 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.23 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
       <div class="row"><button class="btn primary wide" id="openDisp">表示画面を開く</button></div>
+      <div class="row"><button class="btn wide" id="openDispTab" title="ふつうのタブで開くので、Chrome のメニューからテレビにキャストできます">📺 タブで開く（キャスト用）</button></div>
       <div class="row"><span class="status" id="dispStatus">表示画面：未接続</span></div>
     </div>
 
@@ -1706,7 +1707,7 @@ function pressureSources(st){
       const R=ISO_R[it.type];
       src.push({lon:it.lon,lat:it.lat,A:(it.hpa||1013)-1013,rx:it.isoRx||R,ry:it.isoRy||R,rot:it.isoRot||0,g:it.type==='high',a});
     }else if(it.type==='warp'){
-      if(it.kind!=='pull') src.push({lon:it.lon,lat:it.lat,A:it.dp||0,rx:it.rKm||350,ry:it.rKm||350,rot:0,g:true,a});
+      if(it.kind!=='pull') src.push({lon:it.lon,lat:it.lat,A:it.dp||0,rx:it.rKm||350,ry:it.rKm||350,rot:0,g:true,a,w:true});
     }
   }
   return src;
@@ -1788,10 +1789,16 @@ function isobarChains(cam,st){
   if(isoCache.key===key) return isoCache.val;
   const step=kinks.length?Math.max(5,8*cam.k):Math.max(6,13*cam.k), nx=Math.ceil(cam.W/step)+3, ny=Math.ceil(cam.H/step)+3, x0=-step, y0=-step;
   const F=new Float64Array(nx*ny); let mn=Infinity, mxv=-Infinity;
+  // 台風の目のまわりは、ゆがみ点・引っぱり点が効かないようにする（中心がマークからズレない）
+  const tys=st.items.filter(i=>i.type==='typhoon').map(t=>({lon:t.lon,lat:t.lat,cs:Math.cos(t.lat*PI/180),R:Math.max(350,(t.strongKm||300)*1.1,(t.stormKm||150)*1.5)}));
+  const srcMain=src.filter(q=>!q.w), srcWarp=src.filter(q=>q.w);
+  const pinMask=(lo,la)=>{ let m=1; for(const t of tys){ const d=Math.hypot((lo-t.lon)*111.32*t.cs,(la-t.lat)*110.57); const x=clamp((d-t.R)/(1.2*t.R),0,1); m=Math.min(m,x*x*(3-2*x)); } return m; };
   for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){
-    let [lo,la]=cam.toLL(x0+i*step,y0+j*step);
-    if(pulls.length) [lo,la]=pullBack(pulls,lo,la);
-    const v=fieldAt(src,lo,la)+(kinks.length?kinkField(kinks,lo,la):0); F[j*nx+i]=v; if(v<mn) mn=v; if(v>mxv) mxv=v;
+    const [lo0,la0]=cam.toLL(x0+i*step,y0+j*step);
+    const m=tys.length?pinMask(lo0,la0):1;
+    let lo=lo0, la=la0;
+    if(pulls.length && m>0){ const [pl,pa]=pullBack(pulls,lo0,la0); lo=lo0+(pl-lo0)*m; la=la0+(pa-la0)*m; }
+    const v=fieldAt(srcMain,lo,la)+(srcWarp.length&&m>0?(fieldAt(srcWarp,lo,la)-1013)*m:0)+(kinks.length?kinkField(kinks,lo,la):0); F[j*nx+i]=v; if(v<mn) mn=v; if(v>mxv) mxv=v;
   }
   const itv=iso.interval||4, out=[];
   for(let L=Math.ceil(mn/itv)*itv; L<=mxv; L+=itv){
@@ -2667,11 +2674,15 @@ function startOperator(){
     const defs=[{k:'on',t:'check',label:'等圧線を表示'},{k:'interval',t:'select',label:'間隔',opts:[['2','2hPa'],['4','4hPa']]},{k:'labels',t:'check',label:'数字を表示',def:true},{k:'color',t:'color'}];
     let h=fieldsHTML(defs,I);
     h+=`<p class="note">20hPaごとに太線。高・低・台風を選ぶと出る取っ手で楕円に伸ばせます。</p>`;
+    const nW=state.items.filter(i=>i.type==='warp'&&i.kind!=='pull').length, nP=state.items.filter(i=>i.type==='warp'&&i.kind==='pull').length;
+    h+=`<div class="row" style="font-size:13px"><span>ゆがみ点 <b>${nW}</b>個／引っぱり点 <b>${nP}</b>個</span>${nW+nP?`<button class="btn sm danger" data-iso="clearw">ぜんぶ消す</button>`:''}</div>`;
+    if(nW+nP && state.items.some(i=>i.type==='typhoon')) h+=`<p class="note">台風の目のまわりは、ゆがみ点・引っぱり点が効かないようにしています（中心がズレないように）。</p>`;
     h+=`<div class="row"><button class="btn sm" data-iso="warp">＋ ゆがみ点</button><button class="btn sm" data-iso="hand">〜 手で描く</button><button class="btn sm" data-iso="conv">線に変換</button></div>`;
     h+=Z_ROW;
     el.innerHTML=h; bindZ(el);
     bindFields(el,I,defs,()=>{ normalize(I); renderIso(); commit(); },true);
-    el.querySelectorAll('[data-iso]').forEach(b=>b.onclick=()=>({warp:()=>$('isoWarp').click(),hand:()=>$('isoHand').click(),conv:()=>$('isoConv').click()})[b.dataset.iso]());
+    el.querySelectorAll('[data-iso]').forEach(b=>b.onclick=()=>({warp:()=>$('isoWarp').click(),hand:()=>$('isoHand').click(),conv:()=>$('isoConv').click(),
+      clearw:()=>{ const n=state.items.filter(i=>i.type==='warp').length; pushHistory(); state.items=state.items.filter(i=>i.type!=='warp'); [...sel].forEach(id=>{ if(!getItem(id)) sel.delete(id); }); commit(); renderProps(); toast(`ゆがみ点・引っぱり点を ${n}個 消しました（元に戻すで戻せます）`); }})[b.dataset.iso]());
   }
   function renderMulti(propsEl){
     const items=selItems();
@@ -3165,7 +3176,7 @@ function startOperator(){
   const endDrag=()=>{
     if(drag && drag.mode==='pull'){
       if(!drag.moved){ state.items=state.items.filter(i=>i.id!==drag.id); popClosedKey=null; renderProps(); }
-      else{ commit(); toast('引っぱり点ができました。紫の点をドラッグで調整、右クリックか Delete で消せます'); }
+      else{ commit(); renderProps(); toast('引っぱり点ができました。紫の点をドラッグで調整、右クリックか Delete で消せます'); }
       drag=null; updateCursor(); return;
     }
     if(drag){
@@ -3312,6 +3323,12 @@ function startOperator(){
     const w=window.open(url,'tenkizu_display','width=1280,height=760');
     if(w){ Link.addPeer(w); toast('表示画面をモニタへ移動して、クリックで全画面に'); }
     else toast('ポップアップがブロックされました。許可してください');
+  };
+  $('openDispTab').onclick=()=>{
+    const url=location.href.split('#')[0]+'#display';
+    const w=window.open(url,'_blank');
+    if(w){ Link.addPeer(w); toast('タブで開きました。そのタブで「⋮」→「キャスト…」→テレビを選び、Fキーで全画面に'); }
+    else toast('タブを開けませんでした。ポップアップを許可してください');
   };
   function download(blob,name){
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
