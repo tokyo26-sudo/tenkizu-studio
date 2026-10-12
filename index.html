@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.21</title>
+<title>天気図スタジオ v0.22</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -115,12 +115,14 @@ body.display #dcv{display:block}
 body.display.idle{cursor:none}
 #dmsg{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);color:#fff;background:rgba(0,0,0,.55);
   padding:8px 16px;border-radius:8px;font-size:14px;transition:opacity .5s;pointer-events:none}
+  .mcols label{display:flex;align-items:center;gap:3px;font-size:12px;color:var(--sub)}
+  .mcols input[type=color]{width:30px;height:24px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer}
 </style>
 </head>
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.21 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.22 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -160,6 +162,18 @@ body.display.idle{cursor:none}
       <label class="c"><input type="checkbox" id="grid"> 緯線・経線</label>
       <label class="c"><input type="checkbox" id="mBorders"> 国境線（簡略地図のとき）</label>
       <label class="c"><input type="checkbox" id="mLakes"> 湖（琵琶湖・霞ヶ浦・宍道湖など）</label>
+      <div class="box" style="margin:4px 0 8px">
+        <div class="row"><span style="font-size:12px;color:var(--sub)">地図の描き方</span>
+          <div class="seg sm" id="mStyle"><button data-v="normal">ふつう</button><button data-v="hand">手書き風</button></div></div>
+        <label class="f">地図の細かさ<select id="mDetail"><option value="auto">おまかせ（寄ると細かく）</option><option value="50">ざっくり</option><option value="110">超ざっくり</option></select></label>
+        <label class="f">海岸線の太さ：<b id="mCoastWV"></b><input type="range" id="mCoastW" min="0.5" max="6" step="0.1"></label>
+        <label class="f">湖岸線の太さ：<b id="mLakeWV"></b><input type="range" id="mLakeW" min="0.5" max="6" step="0.1"></label>
+        <div style="font-size:12px;color:var(--sub);margin-bottom:3px">色のセット</div>
+        <div class="row" id="mPreset"><button class="btn sm" data-p="std">いつもの</button><button class="btn sm" data-p="jma">気象庁風</button><button class="btn sm" data-p="green">うす緑</button><button class="btn sm" data-p="mono">白黒（印刷用）</button></div>
+        <div class="row mcols"><label>陸<input type="color" id="mLand"></label><label>海<input type="color" id="mSea"></label><label>海岸線<input type="color" id="mCoast"></label><label>緯線経線<input type="color" id="mGridC"></label></div>
+        <div class="row"><span style="font-size:12px;color:var(--sub)">緯線・経線</span>
+          <div class="seg sm" id="mGridDash"><button data-v="1">点線</button><button data-v="0">実線</button></div></div>
+      </div>
       <label class="c"><input type="checkbox" id="mPref"> 県境</label>
       <div id="prefBox" class="box" style="margin:0 0 8px">
         <label class="f">県境の太さ：<b id="mPrefWV"></b><input type="range" id="mPrefW" min="0.5" max="5" step="0.1"></label>
@@ -390,7 +404,7 @@ const TILESETS = {
 };
 /* simple: 簡略地図を下に描く／tile: タイル／overlay: 上に重ねるタイル（alpha, 乗算） */
 const BASEMAPS = {
-  simple:    {name:'簡略地図（気象庁風）', simple:true, attr:'Natural Earth'},
+  simple:    {name:'簡略地図', simple:true, attr:'Natural Earth'},
   simpleHill:{name:'簡略地図＋山の陰影', simple:true, overlay:{ts:'hill',alpha:0.55}, attr:'Natural Earth／出典：地理院タイル'},
   hill:      {name:'地理院 陰影起伏図', simple:true, tile:'hill', attr:'Natural Earth／出典：地理院タイル（陰影起伏図）'},
   relief:    {name:'地理院 色別標高図', simple:true, tile:'relief', overlay:{ts:'hill',alpha:0.35}, attr:'Natural Earth／出典：地理院タイル（色別標高図）'},
@@ -456,7 +470,7 @@ function linesPath(lines,closed){
 }
 const LAKE_LINES=decodeLines(LAKES_ENC), PREF_LINES=decodeLines(PREF_ENC);
 const smallPaths={};
-const lakePathNow=()=>smallPaths['lake@'+PROJ.id]||(smallPaths['lake@'+PROJ.id]=linesPath(LAKE_LINES,true));
+const lakePathNow=(hand)=>{ const kk='lake@'+PROJ.id+(hand?'@h':''); return smallPaths[kk]||(smallPaths[kk]=linesPath(hand?LAKE_LINES.map(l=>wobbleRing(l,true)):LAKE_LINES,true)); };
 const prefPathNow=()=>smallPaths['pref@'+PROJ.id]||(smallPaths['pref@'+PROJ.id]=linesPath(PREF_LINES,false));
 const MAPRAW={}, MAPDATA={};
 const mapLoading={};
@@ -472,7 +486,7 @@ function unwrapRing(ring){
 }
 function loadMapData(name){
   if(MAPRAW[name] || mapLoading[name] || typeof topojson==='undefined') return mapLoading[name]||null;
-  const url={land50:'land-50m',land10:'land-10m',borders:'countries-50m'}[name];
+  const url={land110:'land-110m',land50:'land-50m',land10:'land-10m',borders:'countries-50m'}[name];
   mapLoading[name]=fetch(`https://cdn.jsdelivr.net/npm/world-atlas@2/${url}.json`)
     .then(r=>r.json())
     .then(topo=>{
@@ -499,14 +513,47 @@ function loadMapData(name){
   return mapLoading[name];
 }
 /* いまの図法で Path2D を作る（図法ごとに1回だけ） */
-function mapPath(name){
-  const key=name+'@'+PROJ.id;
+/* 手書き風：線をゆらゆらさせる（いつも同じゆれ方。表示画面でチラチラしない） */
+function wobbleRing(r,close){
+  if(r.length<2) return r;
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  for(const c of r){ x0=Math.min(x0,c[0]); x1=Math.max(x1,c[0]); y0=Math.min(y0,c[1]); y1=Math.max(y1,c[1]); }
+  const ext=Math.max(x1-x0,y1-y0), A=Math.min(0.12,ext*0.05);
+  if(A<0.004) return r;
+  const seed=Math.abs(Math.sin(r[0][0]*12.9898+r[0][1]*78.233)*43758.5453)%1;
+  const f1=seed*6.283, f2=seed*17.3%6.283, f3=seed*31.7%6.283;
+  const seam=c=>Math.abs(c[2]??c[0])>179.99;
+  const src=close?r.concat([r[0]]):r, out=[];
+  let s0=0;
+  const step=Math.max(0.12,Math.min(0.25,ext/12));
+  for(let i=0;i<src.length-1;i++){
+    const a=src[i], b=src[i+1];
+    if(seam(a)&&seam(b)){ out.push(a); s0+=Math.hypot(b[0]-a[0],b[1]-a[1]); continue; }
+    const cs=Math.cos(clamp((a[1]+b[1])/2,-80,80)*PI/180);
+    const dx=(b[0]-a[0])*cs, dy=b[1]-a[1], l=Math.hypot(dx,dy);
+    const n=Math.max(1,Math.ceil(l/step)), nx=l?-dy/l:0, ny=l?dx/l:0;
+    for(let j=0;j<n;j++){
+      const t=j/n, s1=s0+l*t;
+      const w=A*(0.6*Math.sin(s1/2.3*6.283+f1)+0.3*Math.sin(s1/0.9*6.283+f2)+0.15*Math.sin(s1/0.37*6.283+f3));
+      const lon=a[0]+(b[0]-a[0])*t, lat=a[1]+(b[1]-a[1])*t;
+      const ev=(j===0&&seam(a));
+      out.push(ev?a:[lon+nx*w/(cs||1), lat+ny*w, (a[2]!=null&&b[2]!=null)?a[2]+(b[2]-a[2])*t:undefined]);
+    }
+    s0+=l;
+  }
+  if(!close) out.push(src[src.length-1]);
+  return out;
+}
+function mapPath(name,hand){
+  const key=name+'@'+PROJ.id+(hand?'@h':'');
   if(MAPDATA[key]) return MAPDATA[key];
   loadMapData(name);
   const list=MAPRAW[name]; if(!list) return null;
   const P=PROJ, p=new Path2D(), ps=new Path2D();   // ps：ふち線用（180度の切れ目は描かない）
   const seam=c=>Math.abs(c[2]??c[0])>179.99;
+  const small=r=>{ let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity; for(const c of r){ x0=Math.min(x0,c[0]); x1=Math.max(x1,c[0]); y0=Math.min(y0,c[1]); y1=Math.max(y1,c[1]); } return Math.max(x1-x0,y1-y0)<0.45; };
   const draw=(r,close)=>{
+    if(hand){ if(close && name!=='borders' && small(r)) return; if(name!=='borders') r=wobbleRing(r,close); }
     r.forEach((c,i)=>{ const X=P.x(c[0],c[1])*LS,Y=P.y(c[0],c[1])*LS; i?p.lineTo(X,Y):p.moveTo(X,Y); }); if(close) p.closePath();
     const n=r.length, segs=close?n:n-1; let pen=false;
     for(let i=0;i<segs;i++){
@@ -540,25 +587,29 @@ function mapPath(name){
   return (MAPDATA[key]={p,ps});
 }
 const loadLand=()=>loadMapData('land50');
-const DEF_MAPOPTS={proj:'merc', borders:true, lakes:true, pref:false, prefW:1.2, prefColor:'#6b7785', prefDash:false};
+const DEF_MAPOPTS={proj:'merc', style:'normal', detail:'auto', coastW:1.5, lakeW:1.1, land:'#fbf8ef', sea:'#e9f1f7', coast:'#3d4852', gridColor:'', gridDash:true, borders:true, lakes:true, pref:false, prefW:1.2, prefColor:'#6b7785', prefDash:false};
 // ランベルト図法のときは地理院タイルが使えないので、簡略地図にする
 const baseOf=st=>{ const bm=BASEMAPS[st.basemap]?st.basemap:'simple'; return projOf(st).id==='lcc'?'simple':bm; };
 const mapOptsOf=st=>Object.assign({},DEF_MAPOPTS,st.mapOpts||{});
-function landFor(cam){
-  const want10 = cam.wp/(cam.H/REF_H) > 256*Math.pow(2,4.6);
-  if(want10){ const m=mapPath('land10'); if(m) return [m.p,m.ps]; }
-  const m=mapPath('land50');
+function landFor(cam,M){
+  const hand=M.style==='hand', det=(M.detail==='auto'&&hand)?'50':M.detail;
+  if(det==='110'){ const m=mapPath('land110',hand); if(m) return [m.p,m.ps]; }
+  const want10 = det==='auto' && cam.wp/(cam.H/REF_H) > 256*Math.pow(2,4.6);
+  if(want10){ const m=mapPath('land10',hand); if(m) return [m.p,m.ps]; }
+  const m=mapPath('land50',hand);
   return m ? [m.p,m.ps] : null;
 }
 function drawSimple(ctx,cam,st,withLakes){
-  ctx.fillStyle='#e9f1f7'; ctx.fillRect(0,0,cam.W,cam.H);
-  const LL=landFor(cam); if(!LL) return; const [land,landLine]=LL;
-  const s=cam.wp/LS, M=mapOptsOf(st);
+  const M=mapOptsOf(st), hand=M.style==='hand';
+  ctx.fillStyle=M.sea; ctx.fillRect(0,0,cam.W,cam.H);
+  const LL=landFor(cam,M); if(!LL) return; const [land,landLine]=LL;
+  const s=cam.wp/LS;
   ctx.save();
   ctx.setTransform(s,0,0,s,cam.W/2-cam.cx,cam.H/2-cam.cy);
-  ctx.fillStyle='#fbf8ef'; ctx.fill(land);
-  ctx.lineJoin='round'; ctx.lineWidth=1.5*cam.k/s; ctx.strokeStyle='#3d4852'; ctx.stroke(landLine);
-  if(withLakes && M.lakes){ ctx.fillStyle='#e9f1f7'; ctx.fill(lakePathNow()); ctx.lineWidth=1.1*cam.k/s; ctx.stroke(lakePathNow()); }
+  ctx.fillStyle=M.land; ctx.fill(land);
+  ctx.lineJoin='round'; ctx.lineCap='round'; ctx.strokeStyle=M.coast;
+  ctx.lineWidth=(M.coastW||1.5)*cam.k/s; ctx.stroke(landLine);
+  if(withLakes && M.lakes){ const lp=lakePathNow(hand); ctx.fillStyle=M.sea; ctx.fill(lp); ctx.lineWidth=(M.lakeW||1.1)*cam.k/s; ctx.stroke(lp); }
   ctx.restore();
 }
 function drawMapLines(ctx,cam,st,simple){
@@ -583,7 +634,7 @@ function drawBase(ctx,cam,st,B){
   const M=mapOptsOf(st);
   const pure=B.simple && !B.tile && !B.overlay;
   if(pure){
-    const v=st.view, key=[v.lon.toFixed(6),v.lat.toFixed(6),v.z.toFixed(5),JSON.stringify(M),!!MAPRAW.land50,!!MAPRAW.land10,!!MAPRAW.borders,PROJ.id].join('|');
+    const v=st.view, key=[v.lon.toFixed(6),v.lat.toFixed(6),v.z.toFixed(5),JSON.stringify(M),!!MAPRAW.land110,!!MAPRAW.land50,!!MAPRAW.land10,!!MAPRAW.borders,PROJ.id].join('|');
     const ck=cam.W+'x'+cam.H;
     let c=bgCache.get(ck);
     if(!c){ c={cv:document.createElement('canvas'),key:null}; c.cv.width=cam.W; c.cv.height=cam.H; if(bgCache.size>8) bgCache.clear(); bgCache.set(ck,c); }
@@ -603,15 +654,20 @@ function drawBase(ctx,cam,st,B){
   }
   drawMapLines(ctx,cam,st,!!B.simple);
 }
-function drawGrid(ctx,cam,simple){
-  const k=cam.k;
-  if(cam.P.id!=='merc') return drawGridCurved(ctx,cam,simple);
-  ctx.save();
-  ctx.strokeStyle = simple ? 'rgba(60,80,100,.45)' : 'rgba(30,50,80,.35)';
-  ctx.lineWidth = 1.3*k; ctx.setLineDash([7*k,7*k]);
-  const [lonL,latT]=cam.toLL(0,0), [lonR,latB]=cam.toLL(cam.W,cam.H);
+function shadeHex(hex,f){ const n=parseInt(hex.slice(1),16); const c=[n>>16,(n>>8)&255,n&255].map(v=>Math.round(clamp(v*(1+f),0,255))); return '#'+c.map(v=>v.toString(16).padStart(2,'0')).join(''); }
+function gridStyle(ctx,k,simple,M){
+  const g=M&&M.gridColor;
+  ctx.strokeStyle = g ? g : (simple ? 'rgba(60,80,100,.45)' : 'rgba(30,50,80,.35)');
+  ctx.lineWidth = 1.3*k; ctx.setLineDash(M&&M.gridDash===false ? [] : [7*k,7*k]);
   ctx.font = `600 ${18*k}px ${JP_FONT}`;
-  ctx.fillStyle = 'rgba(30,45,60,.75)';
+  ctx.fillStyle = g ? shadeHex(g,-0.3) : 'rgba(30,45,60,.75)';
+}
+function drawGrid(ctx,cam,simple,M){
+  const k=cam.k;
+  if(cam.P.id!=='merc') return drawGridCurved(ctx,cam,simple,M);
+  ctx.save();
+  gridStyle(ctx,k,simple,M);
+  const [lonL,latT]=cam.toLL(0,0), [lonR,latB]=cam.toLL(cam.W,cam.H);
   for(let lon=Math.ceil(lonL/10)*10; lon<=lonR; lon+=10){
     const [x]=cam.toS(lon,0);
     ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,cam.H); ctx.stroke();
@@ -626,12 +682,10 @@ function drawGrid(ctx,cam,simple){
   ctx.restore();
 }
 
-function drawGridCurved(ctx,cam,simple){
+function drawGridCurved(ctx,cam,simple,M){
   const k=cam.k, W=cam.W, H=cam.H, m=40*k;
   ctx.save();
-  ctx.strokeStyle = simple ? 'rgba(60,80,100,.45)' : 'rgba(30,50,80,.35)';
-  ctx.lineWidth = 1.3*k; ctx.setLineDash([7*k,7*k]);
-  ctx.font = `600 ${18*k}px ${JP_FONT}`; ctx.fillStyle = 'rgba(30,45,60,.75)'; ctx.textBaseline='bottom'; ctx.textAlign='left';
+  gridStyle(ctx,k,simple,M); ctx.textBaseline='bottom'; ctx.textAlign='left';
   const inside=q=>q[0]>-m&&q[0]<W+m&&q[1]>-m&&q[1]<H+m;
   const line=(pts,label,edge)=>{
     if(!pts.some(inside)) return;
@@ -1676,6 +1730,46 @@ function pullBack(pulls,lon,lat){
   }
   return [lon,lat];
 }
+/* 前線の「気圧の谷」：選んだ区間だけ、等圧線が前線のところでカクッと折れる */
+const KINK_W=170;   // 谷の幅（km）
+function kinksOf(st){
+  const out=[];
+  for(const it of st.items){
+    if(it.type!=='front' || !it.kink || !it.pts || it.pts.length<2) continue;
+    const a=clamp(Math.min(it.kinkA??0.2,it.kinkB??0.8),0,1), b=clamp(Math.max(it.kinkA??0.2,it.kinkB??0.8),0,1);
+    if(b-a<0.01) continue;
+    const ll=catmull(it.pts.map(p=>p.slice()),10);
+    const lat0=ll.reduce((s2,q)=>s2+q[1],0)/ll.length, cs=Math.cos(lat0*PI/180);
+    const P=ll.map(q=>[q[0]*111.32*cs, q[1]*110.57]), cum=[0];
+    for(let i=1;i<P.length;i++) cum.push(cum[i-1]+Math.hypot(P[i][0]-P[i-1][0],P[i][1]-P[i-1][1]));
+    const tot=cum[cum.length-1]; if(tot<1) continue;
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+    for(const [x,y] of P){ x0=Math.min(x0,x); x1=Math.max(x1,x); y0=Math.min(y0,y); y1=Math.max(y1,y); }
+    const al=it._a==null?1:clamp(it._a,0,1);
+    out.push({P,cum,tot,a,b,cs,D:(it.kinkS??5)*0.35*al,box:[x0-KINK_W,y0-KINK_W,x1+KINK_W,y1+KINK_W]});
+  }
+  return out;
+}
+function kinkField(kinks,lon,lat){
+  let dp=0;
+  for(const K of kinks){
+    const X=lon*111.32*K.cs, Y=lat*110.57;
+    if(X<K.box[0]||X>K.box[2]||Y<K.box[1]||Y>K.box[3]) continue;
+    let best=Infinity, bt=0;
+    for(let i=1;i<K.P.length;i++){
+      const A=K.P[i-1], B=K.P[i], dx=B[0]-A[0], dy=B[1]-A[1], l2=dx*dx+dy*dy||1e-9;
+      const u=clamp(((X-A[0])*dx+(Y-A[1])*dy)/l2,0,1), ex=A[0]+dx*u-X, ey=A[1]+dy*u-Y, d2=ex*ex+ey*ey;
+      if(d2<best){ best=d2; bt=(K.cum[i-1]+(K.cum[i]-K.cum[i-1])*u)/K.tot; }
+    }
+    const d=Math.sqrt(best); if(d>=KINK_W) continue;
+    // 区間のはしは、ゆるやかに浅く
+    const tap=Math.max(0.04,(K.b-K.a)*0.2), sm=x=>{ x=clamp(x,0,1); return x*x*(3-2*x); };
+    const w=sm((bt-K.a)/tap)*sm((K.b-bt)/tap); if(w<=0) continue;
+    const q=1-d/KINK_W;
+    dp-=K.D*w*q*q;   // 前線の上がいちばん低い V字の谷
+  }
+  return dp;
+}
 function fieldAt(src,lon,lat){
   let p=1013;
   for(const s of src){
@@ -1689,15 +1783,15 @@ function fieldAt(src,lon,lat){
 /* マーチングスクエアで等圧線をつくり、つながった線（チェーン）にまとめる */
 const isoCache={key:null,val:null};
 function isobarChains(cam,st){
-  const iso=st.isobar||{}, src=pressureSources(st), pulls=pullsOf(st);
-  const key=JSON.stringify([cam.W,cam.H,st.view,cam.P.id,iso.interval,pulls.map(q=>[q.lon,q.lat,q.dlon,q.dlat,q.r].map(v=>+v.toFixed(4))),src.map(s=>[s.lon,s.lat,s.A,s.rx,s.ry,s.rot,s.a].map(v=>typeof v==='number'?+v.toFixed(4):v))]);
+  const iso=st.isobar||{}, src=pressureSources(st), pulls=pullsOf(st), kinks=kinksOf(st);
+  const key=JSON.stringify([cam.W,cam.H,st.view,cam.P.id,iso.interval,kinks.map(K=>[K.a,K.b,K.D,K.P.length,K.P[0],K.P[K.P.length-1],K.tot].map(v=>Array.isArray(v)?v.map(z=>+z.toFixed(2)):+v.toFixed(3))),pulls.map(q=>[q.lon,q.lat,q.dlon,q.dlat,q.r].map(v=>+v.toFixed(4))),src.map(s=>[s.lon,s.lat,s.A,s.rx,s.ry,s.rot,s.a].map(v=>typeof v==='number'?+v.toFixed(4):v))]);
   if(isoCache.key===key) return isoCache.val;
-  const step=Math.max(6,13*cam.k), nx=Math.ceil(cam.W/step)+3, ny=Math.ceil(cam.H/step)+3, x0=-step, y0=-step;
+  const step=kinks.length?Math.max(5,8*cam.k):Math.max(6,13*cam.k), nx=Math.ceil(cam.W/step)+3, ny=Math.ceil(cam.H/step)+3, x0=-step, y0=-step;
   const F=new Float64Array(nx*ny); let mn=Infinity, mxv=-Infinity;
   for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){
     let [lo,la]=cam.toLL(x0+i*step,y0+j*step);
     if(pulls.length) [lo,la]=pullBack(pulls,lo,la);
-    const v=fieldAt(src,lo,la); F[j*nx+i]=v; if(v<mn) mn=v; if(v>mxv) mxv=v;
+    const v=fieldAt(src,lo,la)+(kinks.length?kinkField(kinks,lo,la):0); F[j*nx+i]=v; if(v<mn) mn=v; if(v>mxv) mxv=v;
   }
   const itv=iso.interval||4, out=[];
   for(let L=Math.ceil(mn/itv)*itv; L<=mxv; L+=itv){
@@ -1798,7 +1892,7 @@ function drawIsoline(ctx,cam,it){
 
 /* ---- シーン切り替えの途中の絵（A→B を t で補間） ---- */
 const easeIO=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
-const TW_KEYS=['op','fadeW','labelGap','labelPos','labelSize','lon','lat','size','stormKm','strongKm','rxKm','ryKm','rot','widthKm','width','alpha','hpa','isoRx','isoRy','isoRot','dp','rKm'];
+const TW_KEYS=['kinkA','kinkB','kinkS','op','fadeW','labelGap','labelPos','labelSize','lon','lat','size','stormKm','strongKm','rxKm','ryKm','rot','widthKm','width','alpha','hpa','isoRx','isoRy','isoRot','dp','rKm'];
 const GROWS=['front','arrow','ink'];
 function tweenState(A,B,t){
   const out=Object.assign({},B);
@@ -1888,7 +1982,7 @@ function render(ctx,W,H,st,o={}){
   ctx.fillStyle='#dfe7ee'; ctx.fillRect(0,0,W,H);
   const bm = baseOf(st), B=BASEMAPS[bm];
   drawBase(ctx,cam,st,B);
-  if(st.grid) drawGrid(ctx,cam,!!B.simple);
+  if(st.grid) drawGrid(ctx,cam,!!B.simple,mapOptsOf(st));
 
   const items = st.items;
   const isoOn=st.isobar && st.isobar.on;
@@ -2251,7 +2345,27 @@ function startOperator(){
     $('mPrefCol').innerHTML=PREF_COLORS.map(c=>`<button data-c="${c}" class="${c===M.prefColor?'on':''}" style="background:${c}"></button>`).join('');
     $('mPrefCol').querySelectorAll('button').forEach(b=>b.onclick=()=>{ M.prefColor=b.dataset.c; renderMapOpts(); commit(); });
     $('mPrefDash').querySelectorAll('button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='1')===!!M.prefDash));
+    $('mStyle').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v===(M.style||'normal')));
+    $('mDetail').value=M.detail||'auto';
+    $('mCoastW').value=M.coastW; $('mCoastWV').textContent=Number(M.coastW).toFixed(1);
+    $('mLakeW').value=M.lakeW; $('mLakeWV').textContent=Number(M.lakeW).toFixed(1);
+    $('mLand').value=M.land; $('mSea').value=M.sea; $('mCoast').value=M.coast; $('mGridC').value=M.gridColor||'#7a8a9a';
+    $('mGridDash').querySelectorAll('button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='1')===(M.gridDash!==false)));
+    $('mPreset').querySelectorAll('button').forEach(b=>{ const P=MAP_PRESETS[b.dataset.p]; b.classList.toggle('on',P.land===M.land&&P.sea===M.sea&&P.coast===M.coast&&P.gridColor===(M.gridColor||'')&&P.gridDash===(M.gridDash!==false)); });
   }
+  const MAP_PRESETS={
+    std:{land:'#fbf8ef',sea:'#e9f1f7',coast:'#3d4852',gridColor:'',gridDash:true},
+    jma:{land:'#a8efaf',sea:'#c5e9f9',coast:'#80d888',gridColor:'#5cb87a',gridDash:false},
+    green:{land:'#e4f3dc',sea:'#ddeffc',coast:'#5e7f5c',gridColor:'',gridDash:true},
+    mono:{land:'#ffffff',sea:'#eeeeee',coast:'#222222',gridColor:'#9a9a9a',gridDash:true}
+  };
+  $('mStyle').querySelectorAll('button').forEach(b=>b.onclick=()=>{ state.mapOpts.style=b.dataset.v; renderMapOpts(); commit(); });
+  $('mDetail').onchange=e=>{ state.mapOpts.detail=e.target.value; commit(); };
+  $('mCoastW').oninput=e=>{ state.mapOpts.coastW=parseFloat(e.target.value); $('mCoastWV').textContent=state.mapOpts.coastW.toFixed(1); commit(); };
+  $('mLakeW').oninput=e=>{ state.mapOpts.lakeW=parseFloat(e.target.value); $('mLakeWV').textContent=state.mapOpts.lakeW.toFixed(1); commit(); };
+  $('mPreset').querySelectorAll('button').forEach(b=>b.onclick=()=>{ Object.assign(state.mapOpts,MAP_PRESETS[b.dataset.p]); renderMapOpts(); commit(); });
+  for(const [id,key] of [['mLand','land'],['mSea','sea'],['mCoast','coast'],['mGridC','gridColor']]) $(id).oninput=e=>{ state.mapOpts[key]=e.target.value; renderMapOpts(); commit(); };
+  $('mGridDash').querySelectorAll('button').forEach(b=>b.onclick=()=>{ state.mapOpts.gridDash=b.dataset.v==='1'; renderMapOpts(); commit(); });
   $('proj').onchange=e=>{ state.mapOpts.proj=e.target.value; const P=projOf(state); state.view.lat=clamp(state.view.lat,P.latMin,P.latMax); if(P.id==='lcc') state.view.lon=clamp(((state.view.lon-P.lon0+540)%360)-180+P.lon0,P.lon0-150,P.lon0+150); renderMapOpts(); commit(); toast(P.id==='lcc'?'ランベルト正角円錐図法にしました（背景は簡略地図）':'メルカトル図法にしました'); };
   $('mBorders').onchange=e=>{ state.mapOpts.borders=e.target.checked; commit(); };
   $('mLakes').onchange=e=>{ state.mapOpts.lakes=e.target.checked; commit(); };
@@ -2476,7 +2590,9 @@ function startOperator(){
         {k:'no',t:'number',label:'台風の番号（号）',min:1,max:40},{k:'hpa',t:'number',label:'中心気圧（hPa）',min:870,max:1010},
         {k:'fillAreas',t:'check',label:'暴風域・強風域をうすく塗る'},{k:'stormKm',t:'range',label:'暴風域（赤）半径',min:0,max:500,step:10,unit:'km'},{k:'strongKm',t:'range',label:'強風域（黄）半径',min:0,max:1200,step:10,unit:'km'},{k:'size',t:'range',label:'丸囲みの大きさ',min:36,max:200,step:2}]);
       case 'icon': return [{k:'size',t:'range',label:'大きさ',min:20,max:400,step:2}];
-      case 'front': return [{k:'kind',t:'select',label:'前線の種類',opts:Object.entries(FRONTS).map(([k2,f])=>[k2,f.name])}].concat(LINE_LABEL);
+      case 'front': return [{k:'kind',t:'select',label:'前線の種類',opts:Object.entries(FRONTS).map(([k2,f])=>[k2,f.name])},
+        {k:'kink',t:'check',label:'等圧線をここで折る（紫の取っ手2つで区間をえらぶ）'},
+        {k:'kinkS',t:'range',label:'折れ具合',min:1,max:10,step:1,dflt:5,when:o=>!!o.kink}].concat(LINE_LABEL);
       case 'arrow': return DEFS.arrow.concat(LINE_LABEL);
       case 'ink': return DEFS.pen;
       case 'text': return [{k:'text',t:'textarea',label:'文字'}].concat(DEFS.text);
@@ -2531,7 +2647,8 @@ function startOperator(){
     if(it.type!=='warp') h+=Z_ROW;
     h+=`<div class="row"><button class="btn sm" data-act="copy">コピー</button><button class="btn sm danger" data-act="del">削除</button></div>`;
     propsEl.innerHTML=h; bindZ(propsEl);
-    bindFields(propsEl,it,defs,(k)=>{ normalize(it); commit(); if(k==='style'||k==='precip'||k==='fade'||k==='labelWrap'){ if(k==='labelWrap' && it.labelPos==null) it.labelPos=(it.type==='cloud'&&it.mode!=='lasso')?0.5:0; renderProps(); } },true);
+    bindFields(propsEl,it,defs,(k)=>{ normalize(it); commit(); if(k==='kink' && it.kink){ if(it.kinkA==null) it.kinkA=0.2; if(it.kinkB==null) it.kinkB=0.8; if(!state.isobar.on) toast('等圧線を表示すると、折れ目が見えます'); }
+      if(k==='style'||k==='precip'||k==='fade'||k==='labelWrap'||k==='kink'){ if(k==='labelWrap' && it.labelPos==null) it.labelPos=(it.type==='cloud'&&it.mode!=='lasso')?0.5:0; renderProps(); } },true);
     propsEl.querySelectorAll('[data-act]').forEach(el=>el.onclick=()=>{
       const a=el.dataset.act;
       if(a==='del') removeSel();
@@ -2729,6 +2846,10 @@ function startOperator(){
         const path=isolinePath(c,it), L=measure(path), q=pointAt(path,L,L[L.length-1]*(it.labelPos??0.5));
         H.push({k:'lp',x:q[0],y:q[1]+16*c.k});
       }
+      if(it.type==='front' && it.kink){
+        const path=catmull(sp), L=measure(path), tot=L[L.length-1]||1;
+        for(const [kk,v] of [['ka',it.kinkA??0.2],['kb',it.kinkB??0.8]]){ const q=pointAt(path,L,tot*clamp(v,0,1)); H.push({k:kk,x:q[0],y:q[1]}); }
+      }
       if((it.type==='front'||it.type==='arrow') && String(it.label||'').trim()){
         const q=lineLabelAnchor(catmull(sp),it);
         H.push({k:'lp',x:q[0],y:q[1]-18*c.k});   // あいだの点と重ならないよう少し上に
@@ -2920,7 +3041,7 @@ function startOperator(){
           pushHistory(); drag={mode:'vertex', id:it.id, vi:h.i}; return;
         }
         if(h.k==='m'){ pushHistory(); it.pts.splice(h.i+1,0,[lon,lat]); commit(); drag={mode:'vertex', id:it.id, vi:h.i+1}; return; }
-        if(h.k==='ex'||h.k==='ey'||h.k==='ix'||h.k==='iy'||h.k==='lp'){ pushHistory(); drag={mode:h.k, id:it.id}; return; }
+        if(h.k==='ex'||h.k==='ey'||h.k==='ix'||h.k==='iy'||h.k==='lp'||h.k==='ka'||h.k==='kb'){ pushHistory(); drag={mode:h.k, id:it.id}; return; }
         if(h.k==='fv'||h.k==='fr'||h.k==='pv'){
           if(h.k==='pv' && e.altKey){ pushHistory(); it.past.splice(h.i,1); commit(); return; }
           pushHistory(); drag={mode:h.k, id:it.id, i:h.i}; return;
@@ -3006,6 +3127,11 @@ function startOperator(){
       else if(drag.mode==='pv'){ it.past[drag.i]=[lon,lat]; }
       else{ const f=it.fc[drag.i], [x,y]=c.toS(f.lon,f.lat); f.rKm=clamp(Math.hypot(sx-x,sy-y)/c.pxPerKm(f.lat),20,1200); }
       commit();
+    }else if(drag.mode==='ka'||drag.mode==='kb'){
+      const it=getItem(drag.id); if(!it) return;
+      const path=catmull(it.pts.map(p=>c.toS(p[0],p[1]))), L=measure(path), tot=L[L.length-1]||1;
+      let best=0, bd=Infinity; path.forEach((q,i)=>{ const d2=Math.hypot(q[0]-sx,q[1]-sy); if(d2<bd){ bd=d2; best=i; } });
+      it[drag.mode==='ka'?'kinkA':'kinkB']=clamp(L[best]/tot,0,1); commit();
     }else if(drag.mode==='lp'){
       const it=getItem(drag.id); if(!it) return;
       const path=it.type==='isoline'?isolinePath(c,it):(it.type==='cloud'||it.type==='area')?(wrapPath(c,it)||{path:[[0,0],[1,0]]}).path:catmull(it.pts.map(p=>c.toS(p[0],p[1]))), L=measure(path), tot=L[L.length-1]||1;
@@ -3202,7 +3328,7 @@ function startOperator(){
     const octx=off.getContext('2d');
     render(octx,W,H,state,{time:performance.now()/1000});   // 使うフォントの読み込みを促す
     const waits=[artReady, symReady, ...fontPending];
-    if(BASEMAPS[baseOf(state)].simple){ for(const n of ['land50','land10','borders']){ const p=loadMapData(n); if(p) waits.push(p); } }
+    if(BASEMAPS[baseOf(state)].simple){ for(const n of ['land110','land50','land10','borders']){ const p=loadMapData(n); if(p) waits.push(p); } }
     for(const ts of baseTilesets(baseOf(state))) waits.push(...visibleTiles(c,ts).map(t=>getTile(ts,t.z,t.xx,t.y).p));
     await Promise.race([Promise.all(waits), new Promise(r=>setTimeout(r,6000))]);
     render(octx,W,H,state,{time:performance.now()/1000});
@@ -3303,8 +3429,17 @@ function startOperator(){
           for(const h of H){ ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(h.x,h.y); ctx.stroke(); }
         }
         ctx.setLineDash([]);
+        if(one.type==='front' && one.kink && one.pts.length>1){   // 折る区間を紫の帯で
+          const path=catmull(one.pts.map(p=>c.toS(p[0],p[1]))), L=measure(path), tot=L[L.length-1]||1;
+          const a=clamp(Math.min(one.kinkA??0.2,one.kinkB??0.8),0,1)*tot, b=clamp(Math.max(one.kinkA??0.2,one.kinkB??0.8),0,1)*tot;
+          ctx.save(); ctx.strokeStyle='rgba(124,58,237,.35)'; ctx.lineWidth=14*d; ctx.lineCap='round';
+          ctx.beginPath(); let st0=false;
+          for(let t=a;t<=b;t+=3*d){ const q=pointAt(path,L,t); st0?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]); st0=true; }
+          ctx.stroke(); ctx.restore();
+        }
         for(const h of H){
           ctx.beginPath();
+          if(h.k==='ka'||h.k==='kb'){ ctx.save(); ctx.translate(h.x,h.y); ctx.rotate(PI/4); ctx.rect(-6*d,-6*d,12*d,12*d); ctx.fillStyle='#7c3aed'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2*d; ctx.stroke(); ctx.restore(); continue; }
           if(h.k==='m'){ ctx.globalAlpha=.65; ctx.arc(h.x,h.y,4.5*d,0,2*PI); ctx.fillStyle='#fff'; ctx.fill(); ctx.stroke(); ctx.globalAlpha=1; }
           else if(h.k==='lp'){ ctx.arc(h.x,h.y,6*d,0,2*PI); ctx.fillStyle='#f59e0b'; ctx.fill(); ctx.stroke(); }
           else{ ctx.arc(h.x,h.y,6.5*d,0,2*PI); ctx.fillStyle=h.k==='v'?'#fff':'#2563eb'; ctx.fill(); ctx.stroke(); }
