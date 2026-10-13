@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.25</title>
+<title>天気図スタジオ v0.26</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -122,7 +122,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.25 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.26 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -222,7 +222,7 @@ body.display.idle{cursor:none}
         <select id="fontAll" style="flex:1;padding:4px 6px;border:1px solid var(--line);border-radius:6px"></select>
         <button class="btn sm" id="fontAllBtn">全部これに</button>
       </div>
-      <div class="row"><span style="font-size:12px;color:var(--sub);width:100%">線の太さ（前線・台風の円・進路・矢印・等圧線）</span>
+      <div class="row"><span style="font-size:12px;color:var(--sub);width:100%">線の太さ（前線・台風の円・進路・矢印・等圧線・虹）</span>
         <button class="btn sm" id="lineWReset">全部もとに戻す</button>
       </div>
     </div>
@@ -1488,6 +1488,16 @@ function drawArea(ctx,cam,it){
 
 /* ---- 雲（イラスト風） ---- */
 const CLOUD_TONES={white:{fill:'#ffffff',line:'#7f8e9e',shade:'#dde4ec'}, gray:{fill:'#b4bfcb',line:'#5f6d7c',shade:'#929eac'}};
+/* 雲の色の濃さ：0＝白、35＝いままでの灰色、100＝青みのある黒 */
+const CLOUD_STOPS=[[0,CLOUD_TONES.white],[35,CLOUD_TONES.gray],[100,{fill:'#3a4452',line:'#1b222b',shade:'#29313c'}]];
+const toneOf=it=>it.toneV!=null&&isFinite(+it.toneV) ? clamp(+it.toneV,0,100) : (it.tone==='gray'?35:0);
+function lerpHex(a,b,t){ const A=parseInt(a.slice(1),16), B=parseInt(b.slice(1),16); const f=sh=>Math.round(((A>>sh)&255)+(((B>>sh)&255)-((A>>sh)&255))*t); return '#'+[16,8,0].map(sh=>f(sh).toString(16).padStart(2,'0')).join(''); }
+function cloudColors(v){
+  v=clamp(Math.round(v),0,100);
+  let i=0; while(i<CLOUD_STOPS.length-2 && v>CLOUD_STOPS[i+1][0]) i++;
+  const [v0,c0]=CLOUD_STOPS[i], [v1,c1]=CLOUD_STOPS[i+1], t=(v-v0)/(v1-v0);
+  return {fill:lerpHex(c0.fill,c1.fill,t), line:lerpHex(c0.line,c1.line,t), shade:lerpHex(c0.shade,c1.shade,t)};
+}
 /* 雲の形：少ない点ならなめらかな曲線に（変形できる雲）、細かい点はそのまま */
 function cloudScreenPath(cam,it){
   const sp=it.pts.map(p=>cam.toS(p[0],p[1]));
@@ -1558,7 +1568,7 @@ function cloudPuffs(cam,it){
 function puffR(p,time,anim){ return anim ? p.r*(1+0.045*Math.sin(time*0.9+p.ph)) : p.r; }
 function drawPuffs(ctx,puffs,tone,k,time,anim,relief){
   if(!puffs.length) return;
-  const T=CLOUD_TONES[tone]||CLOUD_TONES.white, lw=3*k;
+  const T=cloudColors(tone), lw=3*k;
   const disc=(dy,rs)=>{ ctx.beginPath(); for(const p of puffs){ const r=puffR(p,time,anim)*rs, y=p.y+puffR(p,time,anim)*dy; ctx.moveTo(p.x+r,y); ctx.arc(p.x,y,r,0,2*PI); } ctx.fill(); };
   ctx.fillStyle=T.line; ctx.beginPath();
   for(const p of puffs){ const r=puffR(p,time,anim)+lw; ctx.moveTo(p.x+r,p.y); ctx.arc(p.x,p.y,r,0,2*PI); }
@@ -1624,9 +1634,10 @@ function thunderState(it,puffs,time,anim){
   const seed=hashStr(it.id||'t');
   const low=puffs.slice().sort((a,b)=>(b.y+b.r)-(a.y+a.r)).slice(0,Math.max(1,Math.ceil(puffs.length*0.3)));
   if(!anim){ const R=rng(seed); return {p:low[Math.floor(R()*low.length)], seed, flash:false}; }
-  const period=3.2, off=(seed%1000)/1000*period, t=time+off, cyc=Math.floor(t/period), ph=t-cyc*period;
+  const fq=clamp(Number(it.thFreq||2),1,3), period=[0,6,3.2,1.8][fq], chance=[0,0.5,0.75,0.9][fq];
+  const off=(seed%1000)/1000*period, t=time+off, cyc=Math.floor(t/period), ph=t-cyc*period;
   const R=rng(hashInt(cyc,3,seed));
-  if(R()>0.75) return null;
+  if(R()>chance) return null;
   const on = ph<0.09 || (ph>0.17 && ph<0.3);
   if(!on) return null;
   return {p:low[Math.floor(R()*low.length)], seed:hashInt(cyc,5,seed), flash:true};
@@ -1657,7 +1668,7 @@ function drawClouds(ctx,cam,items,eraseItems,time,anim){
     if(it.mode==='erase') continue;
     let puffs=cloudPuffs(cam,it);
     if(erasers.length) puffs=puffs.filter(p=>!erasers.some(e=>distPoly([p.x,p.y],e.sp)<e.r));
-    list.push({it,puffs,tone:it.tone==='gray'?'gray':'white',a:(it._a!=null && it._a<0.999)?Math.max(0,it._a):1});
+    list.push({it,puffs,tone:Math.round(toneOf(it)),a:(it._a!=null && it._a<0.999)?Math.max(0,it._a):1});
   }
   const k=cam.k;
   ctx.save();
@@ -1666,10 +1677,10 @@ function drawClouds(ctx,cam,items,eraseItems,time,anim){
   for(const L of list){ ctx.globalAlpha=L.a; drawPrecip(ctx,L.it,L.puffs,k,time,anim); }
   // 雷は雲のうしろ（雲の底から出てくるように見せる）
   const bolts=list.map(L=>({L,st:thunderState(L.it,L.puffs,time,anim)})).filter(b=>b.st);
-  for(const b of bolts){ ctx.globalAlpha=b.L.a; drawBolt(ctx,b.st,k); }
+  for(const b of bolts){ ctx.globalAlpha=b.L.a; drawBolt(ctx,b.st,k*clamp((b.L.it.thSize??60)/100,0.1,1)); }
   ctx.globalAlpha=1;
   const full=list.filter(L=>L.a>=1);
-  for(const tone of ['gray','white']) for(const rel of [false,true]){
+  for(const tone of [...new Set(full.map(L=>L.tone))].sort((a,b)=>b-a)) for(const rel of [false,true]){
     drawPuffs(ctx,full.filter(L=>L.tone===tone && (L.it.relief!==false)===rel).flatMap(L=>L.puffs),tone,k,time,anim,rel);
   }
   for(const L of list.filter(L=>L.a<1)){ ctx.globalAlpha=L.a; drawPuffs(ctx,L.puffs,L.tone,k,time,anim,L.it.relief!==false); }
@@ -1693,6 +1704,37 @@ function drawClouds(ctx,cam,items,eraseItems,time,anim){
     for(const p of L.puffs){ ctx.moveTo(p.x+p.r,p.y); ctx.arc(p.x,p.y,p.r,0,2*PI); }
     ctx.fill();
   }
+  ctx.restore();
+}
+
+/* ---- 虹（まるいアーチ） ---- */
+const RAINBOW_COLS={'7':['#e5322d','#f58220','#ffd21a','#3cb44b','#2f7de1','#3f3fbf','#8a3fc0'],'4':['#e5322d','#ffb000','#3cb44b','#2f7de1']};
+function rainbowGeom(cam,it){
+  if(!it.pts || it.pts.length<2) return null;
+  const P0=cam.toS(it.pts[0][0],it.pts[0][1]), P1=cam.toS(it.pts[1][0],it.pts[1][1]);
+  const dx=P1[0]-P0[0], dy=P1[1]-P0[1], c=Math.hypot(dx,dy); if(c<2) return null;
+  let nx=dy/c, ny=-dx/c; if(ny>0 || (ny===0 && nx<0)){ nx=-nx; ny=-ny; }   // 画面の上側にふくらむ
+  const M=[(P0[0]+P1[0])/2,(P0[1]+P1[1])/2], sg=clamp(it.rise??0.35,0.03,1.2)*c;
+  const Rr=(c*c/4+sg*sg)/(2*sg), C=[M[0]+nx*(sg-Rr), M[1]+ny*(sg-Rr)], apex=[M[0]+nx*sg, M[1]+ny*sg];
+  const norm=a=>((a%(2*PI))+2*PI)%(2*PI);
+  const a0=Math.atan2(P0[1]-C[1],P0[0]-C[0]), a1=Math.atan2(P1[1]-C[1],P1[0]-C[0]), aA=Math.atan2(apex[1]-C[1],apex[0]-C[0]);
+  const d1=norm(a1-a0), sweep = norm(aA-a0)<d1 ? d1 : d1-2*PI;
+  const cols=RAINBOW_COLS[String(it.colors||'7')]||RAINBOW_COLS['7'], bw=(it.bandW??8)*cam.k;
+  const poly=[]; for(let i=0;i<=64;i++){ const a=a0+sweep*i/64; poly.push([C[0]+Math.cos(a)*Rr, C[1]+Math.sin(a)*Rr]); }
+  return {P0,P1,M,nx,ny,c,C,R:Rr,a0,sweep,apex,cols,bw,half:cols.length*bw/2,poly};
+}
+function drawRainbow(ctx,cam,it,grow=1){
+  const G=rainbowGeom(cam,it); if(!G) return;
+  const n=G.cols.length, end=G.a0+G.sweep*clamp(grow,0,1), ccw=G.sweep<0;
+  if(Math.abs(end-G.a0)<1e-4) return;
+  ctx.save(); ctx.lineCap='butt';
+  ctx.strokeStyle='rgba(255,255,255,.7)'; ctx.lineWidth=n*G.bw+4*cam.k;
+  ctx.beginPath(); ctx.arc(G.C[0],G.C[1],G.R,G.a0,end,ccw); ctx.stroke();
+  G.cols.forEach((col,i)=>{
+    const r=G.R+((n-1)/2-i)*G.bw; if(r<=0.5) return;
+    ctx.strokeStyle=col; ctx.lineWidth=G.bw+0.6;   // すき間が出ないよう少し重ねる
+    ctx.beginPath(); ctx.arc(G.C[0],G.C[1],r,G.a0,end,ccw); ctx.stroke();
+  });
   ctx.restore();
 }
 
@@ -1909,8 +1951,8 @@ function drawIsoline(ctx,cam,it){
 
 /* ---- シーン切り替えの途中の絵（A→B を t で補間） ---- */
 const easeIO=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
-const TW_KEYS=['kinkA','kinkB','kinkS','op','fadeW','labelGap','labelPos','labelSize','lon','lat','size','stormKm','strongKm','rxKm','ryKm','rot','widthKm','width','alpha','hpa','isoRx','isoRy','isoRot','dp','rKm','lw','ringW','trackW','w'];
-const GROWS=['front','arrow','ink'];
+const TW_KEYS=['kinkA','kinkB','kinkS','op','fadeW','labelGap','labelPos','labelSize','lon','lat','size','stormKm','strongKm','rxKm','ryKm','rot','widthKm','width','alpha','hpa','isoRx','isoRy','isoRot','dp','rKm','lw','ringW','trackW','w','rise','bandW','thSize','toneV'];
+const GROWS=['front','arrow','ink','rainbow'];
 function tweenState(A,B,t){
   const out=Object.assign({},B);
   out.view={lon:A.view.lon+(B.view.lon-A.view.lon)*t, lat:A.view.lat+(B.view.lat-A.view.lat)*t, z:A.view.z+(B.view.z-A.view.z)*t};
@@ -1932,7 +1974,7 @@ function tweenState(A,B,t){
 }
 
 /* ---- 全体の描画 ---- */
-const DRAW_ORDER = {isobars:-1, isoline:0, area:0, station:6, cloud:1, typhoon:2, front:3, arrow:4, high:5, low:5, cmark:5, warp:5, icon:6, text:7, ink:8};
+const DRAW_ORDER = {isobars:-1, rainbow:1, isoline:0, area:0, station:6, cloud:1, typhoon:2, front:3, arrow:4, high:5, low:5, cmark:5, warp:5, icon:6, text:7, ink:8};
 /* ---- 濃さ・片側をうすく ---- */
 const FADE_DIRS={r:[1,0],l:[-1,0],u:[0,-1],d:[0,1],ur:[0.7071,-0.7071],ul:[-0.7071,-0.7071],dr:[0.7071,0.7071],dl:[-0.7071,0.7071]};
 const opOf=it=>it.op==null?100:it.op;
@@ -1940,7 +1982,8 @@ const needsLayer=it=>opOf(it)<99.5 || !!FADE_DIRS[it.fade];
 function itemExtent(cam,it){
   const k=cam.k; let xs=[], ys=[], pad=20*k;
   const add=(lon,lat,r)=>{ const [x,y]=cam.toS(lon,lat); xs.push(x-r,x+r); ys.push(y-r,y+r); };
-  if(it.type==='area' && it.shape==='ellipse'){ add(it.lon,it.lat,Math.max(it.rxKm,it.ryKm)*cam.pxPerKm(it.lat)); }
+  if(it.type==='rainbow'){ const G=rainbowGeom(cam,it); if(G) for(const q of G.poly){ xs.push(q[0]-G.half,q[0]+G.half); ys.push(q[1]-G.half,q[1]+G.half); } }
+  else if(it.type==='area' && it.shape==='ellipse'){ add(it.lon,it.lat,Math.max(it.rxKm,it.ryKm)*cam.pxPerKm(it.lat)); }
   else if(it.pts && it.pts.length){
     if(it.type==='cloud') pad=(it.widthKm||260)*cam.pxPerKm(it.pts[0][1])/2+8*k;
     else if(it.type==='arrow') pad=(it.width||12)*k*2;
@@ -2043,6 +2086,7 @@ function render(ctx,W,H,st,o={}){
     else if(it.type==='cmark') drawCMark(ctx,cam,it);
     else if(it.type==='isoline') drawIsoline(ctx,cam,it);
     else if(it.type==='station') drawStation(ctx,cam,it);
+    else if(it.type==='rainbow') drawRainbow(ctx,cam,it,grow);
     };
     if(needsLayer(it)){ drawLayered(ctx,cam,it,body); continue; }
     ctx.save();
@@ -2127,7 +2171,7 @@ function startDisplay(){
   addEventListener('keydown',e=>{ if(e.key==='f'||e.key==='F'){ document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{}); } });
 
   const LERP_KEYS=TW_KEYS;
-  const GROW_TYPES=['front','arrow','ink'];
+  const GROW_TYPES=['front','arrow','ink','rainbow'];
   function smooth(dt){
     const f=1-Math.exp(-dt*9);
     cur.basemap=target.basemap; cur.grid=target.grid; cur.anim=target.anim; cur.isobar=target.isobar; cur.mapOpts=target.mapOpts;
@@ -2210,7 +2254,7 @@ function startOperator(){
       s.zfree=true;
     }
     if(!s.isobar) s.isobar={on:false,interval:4,color:'#4a5560',labels:true};
-    const fixCloud=items=>(items||[]).forEach(i=>{ if(i.type==='cloud' && i.precip==='thunder'){ i.precip='rain'; i.thunder=true; } });
+    const fixCloud=items=>(items||[]).forEach(i=>{ if(i.type==='cloud' && i.precip==='thunder'){ i.precip='rain'; i.thunder=true; } if(i.type==='cloud' && i.toneV==null) i.toneV=i.tone==='gray'?35:0; });
     fixCloud(s.items); (s.scenes||[]).forEach(sc=>{ if(sc.snap) fixCloud(sc.snap.items); });
     const addIso=items=>{ if(items && !items.some(i=>i.type==='isobars')) items.unshift({id:'isobars',type:'isobars'}); };
     addIso(s.items); (s.scenes||[]).forEach(sc=>{ if(sc.snap) addIso(sc.snap.items); });
@@ -2240,7 +2284,8 @@ function startOperator(){
     pen:{color:'#e03a3a', width:6},
     text:{color:'#1d2733', size:48, bold:true, font:'gothic'},
     area:{color:'#2f6fe0', alpha:0.3, edge:'line', font:'gothic'},
-    cloud:{mode:'brush', widthKm:260, tone:'white', relief:true, shadow:false, precip:'none', rainLevel:2, snowLevel:2, thunder:false},
+    cloud:{mode:'brush', widthKm:260, toneV:0, relief:true, shadow:false, precip:'none', rainLevel:2, snowLevel:2, thunder:false, thSize:60, thFreq:'2'},
+    rainbow:{colors:'7', bandW:8},
     cmark:{char:'暑', color:'#e03a3a', textColor:'#ffffff', size:72, font:'gothic'},
     isoline:{level:1012, color:'#4a5560'},
     station:{sym:'fair', dir:0, force:3, temp:'', pres:'', size:80}
@@ -2265,7 +2310,8 @@ function startOperator(){
     {id:'eraser', mk:'⌫', label:'手書き消し'},
     {id:'cmark', mk:'<span style="color:#e03a3a">●</span>', label:'丸文字'},
     {id:'isoline', mk:'<span style="color:#4a5560">〜</span>', label:'等圧線(手)'},
-    {id:'station', mk:'⦶', label:'観測点'}
+    {id:'station', mk:'⦶', label:'観測点'},
+    {id:'rainbow', mk:'<span style="background:linear-gradient(#e5322d,#ffd21a,#3cb44b,#2f7de1);-webkit-background-clip:text;background-clip:text;color:transparent">⌒</span>', label:'虹'}
   ];
 
   /* ---------- 汎用フォーム ---------- */
@@ -2325,13 +2371,16 @@ function startOperator(){
   const FONT_SEL={k:'font',t:'select',label:'フォント',opts:FONT_OPTS,dflt:'gothic'};
   const pct=v=>Math.round(v*100);
   const CLOUD_EXTRA=[
-    {k:'tone',t:'select',label:'雲の色',opts:[['white','白い雲'],['gray','灰色の雲（雨雲）']]},
+    {k:'toneV',t:'range',label:'雲の色（0＝白 → 100＝黒）',min:0,max:100,step:1,dflt:0},
+    {k:'toneP',t:'seg',opts:[['0','白'],['35','灰'],['100','黒']]},
     {k:'relief',t:'check',label:'底に陰（立体っぽく）',def:true},
     {k:'shadow',t:'check',label:'地面に影を落とす'},
     {k:'precip',t:'select',label:'雲から降らせる',opts:[['none','なし'],['rain','雨'],['snow','雪']],dflt:'none'},
     {k:'rainLevel',t:'select',label:'雨の強さ',opts:[['1','小雨'],['2','ふつう'],['3','大雨']],when:o=>o.precip==='rain'},
     {k:'snowLevel',t:'select',label:'雪の強さ',opts:[['1','小雪'],['2','ふつう'],['3','大雪']],dflt:'2',when:o=>o.precip==='snow'},
-    {k:'thunder',t:'check',label:'⚡ 雷を出す'}
+    {k:'thunder',t:'check',label:'⚡ 雷を出す'},
+    {k:'thSize',t:'range',label:'雷の大きさ',min:20,max:100,step:5,dflt:60,unit:'%',reset:true,when:o=>!!o.thunder},
+    {k:'thFreq',t:'seg',label:'光る回数',opts:[['1','少ない'],['2','ふつう'],['3','多い']],dflt:'2',when:o=>!!o.thunder}
   ];
   const DEFS={
     arrow:[{k:'head',t:'select',label:'先っぽ',opts:[['normal','矢印'],['fat','太い矢印（風の矢印）'],['both','両はし矢印 ⇔'],['none','線だけ（先っぽなし）']]},{k:'dash',t:'check',label:'点線にする（線だけのとき）'},{k:'color',t:'color'},{k:'width',t:'range',label:'太さ',min:2,max:30,step:1,dflt:12,reset:true}],
@@ -2340,12 +2389,13 @@ function startOperator(){
     area:[{k:'color',t:'color'},{k:'alpha',t:'range',label:'濃さ',min:0.08,max:0.8,step:0.02,fmt:pct,unit:'%'},{k:'edge',t:'select',label:'ふち',opts:[['line','線あり'],['none','線なし'],['soft','ふわっとぼかす']]}],
     cloud:[{k:'mode',t:'seg',opts:[['brush','筆でなぞる'],['lasso','囲んで塗る'],['erase','雲消しゴム']]},{k:'widthKm',t:'range',label:'筆の太さ・雲の粒',min:80,max:700,step:10,unit:'km'}].concat(CLOUD_EXTRA),
     mark:[STYLE_SEL,FONT_SEL],
+    rainbow:[{k:'colors',t:'seg',label:'色の数',opts:[['7','7色'],['4','4色']],dflt:'7'},{k:'bandW',t:'range',label:'帯の太さ',min:2,max:30,step:1,dflt:8,reset:true}],
     isoline:[{k:'level',t:'number',label:'気圧（hPa）20の倍数は太線',min:880,max:1080,step:2},{k:'color',t:'color'}],
     station:[{k:'sym',t:'select',label:'天気',opts:SYMS.map(([k2,n])=>[k2,n])},{k:'dir',t:'select',label:'風向（風が吹いてくる方角）',opts:DIR16.map((n,i)=>[String(i),n])},{k:'force',t:'range',label:'風力',min:0,max:12,step:1},{k:'temp',t:'text',label:'気温（左に表示）',max:6},{k:'pres',t:'text',label:'気圧（右に表示）',max:6},{k:'size',t:'range',label:'大きさ',min:30,max:240,step:2}],
     cmark:[{k:'char',t:'text',label:'丸の中の文字（1〜3文字）',max:3},{k:'color',t:'color',label:'丸の色'},{k:'textColor',t:'select',label:'文字の色',opts:[['#ffffff','白'],['#1d2733','黒']]},{k:'size',t:'range',label:'大きさ',min:36,max:200,step:2},FONT_SEL]
   };
   // rainLevel は select なので文字列で入る → 数値に
-  const normalize=it=>{ if(!it) return; if(it.rainLevel!=null) it.rainLevel=Number(it.rainLevel); if(it.snowLevel!=null) it.snowLevel=Number(it.snowLevel); if(it.precip==='thunder'){ it.precip='rain'; it.thunder=true; } if(it.dir!=null) it.dir=Number(it.dir); if(it.interval!=null) it.interval=Number(it.interval); if(it.type==='isoline' && it.level!=null) it.thick=Number(it.level)%20===0; };
+  const normalize=it=>{ if(!it) return; if(it.toneP!=null){ it.toneV=Number(it.toneP); delete it.toneP; } if(it.rainLevel!=null) it.rainLevel=Number(it.rainLevel); if(it.snowLevel!=null) it.snowLevel=Number(it.snowLevel); if(it.precip==='thunder'){ it.precip='rain'; it.thunder=true; } if(it.dir!=null) it.dir=Number(it.dir); if(it.interval!=null) it.interval=Number(it.interval); if(it.type==='isoline' && it.level!=null) it.thick=Number(it.level)%20===0; };
 
   /* ---------- UI 組み立て ---------- */
   const bmSel=$('basemap');
@@ -2507,6 +2557,7 @@ function startOperator(){
     cmark:'丸の中の文字を決めて、地図をクリックで置く（暑・湿・寒・Aなど1〜3文字）。',
     isoline:'クリックで点を打つ → 最後の点をもう一度クリックで確定。最初の点をクリックすると輪っかに。',
     station:'地図をクリックで置く。天気・風向・風力・気温・気圧は吹き出しで。',
+    rainbow:'ドラッグで虹の両はしを決める。選ぶと出る真ん中の点で、アーチの高さを変えられます。',
     warp:'等圧線をゆがませる点を置く場所をクリック。置いたらドラッグで動かせます（表示画面には出ません）。'
   };
   function toolGroup(t){
@@ -2527,8 +2578,9 @@ function startOperator(){
     if(defs) bindFields(box,obj,defs,(k)=>{
       normalize(obj);
       const it=lastMade && sel.has(lastMade) && getItem(lastMade);
-      if(it && k!=='mode' && toolMatches(it)){ pushHistory(); it[k]=clone(obj[k]); normalize(it); commit(); renderProps(); }
-      if(k==='precip') renderToolOpts();
+      const kk=k==='toneP'?'toneV':k;
+      if(it && k!=='mode' && toolMatches(it)){ pushHistory(); it[kk]=clone(obj[kk]); normalize(it); commit(); renderProps(); }
+      if(k==='precip'||k==='thunder'||k==='toneP') renderToolOpts();
     },false);
     const ic=$('inkClear'); if(ic) ic.onclick=()=>{ pushHistory(); state.items=state.items.filter(i=>i.type!=='ink'); fixSel(); commit(); };
     const cc=$('cloudClear'); if(cc) cc.onclick=()=>{ pushHistory(); state.items=state.items.filter(i=>i.type!=='cloud'); fixSel(); commit(); };
@@ -2536,7 +2588,7 @@ function startOperator(){
   function toolMatches(it){
     const g=toolGroup(tool);
     return (g==='cloud'&&it.type==='cloud'&&it.mode!=='erase') || (g==='pen'&&it.type==='ink') || (g==='arrow'&&it.type==='arrow')
-      || ((g==='ellipse'||g==='blob')&&it.type==='area') || (g==='text'&&it.type==='text') || (g==='mark'&&['high','low','typhoon'].includes(it.type)) || (g==='cmark'&&it.type==='cmark') || (g==='isoline'&&it.type==='isoline') || (g==='station'&&it.type==='station');
+      || ((g==='ellipse'||g==='blob')&&it.type==='area') || (g==='text'&&it.type==='text') || (g==='mark'&&['high','low','typhoon'].includes(it.type)) || (g==='cmark'&&it.type==='cmark') || (g==='isoline'&&it.type==='isoline') || (g==='station'&&it.type==='station') || (g==='rainbow'&&it.type==='rainbow');
   }
   function made(it){ lastMade=it.id; select(it.id); }
   function setTool(t){
@@ -2592,7 +2644,7 @@ function startOperator(){
   }
 
   /* ---------- 選択中のプロパティ ---------- */
-  const TYPE_NAME={high:'高気圧',low:'低気圧',typhoon:'台風',front:'前線',arrow:'矢印・線',ink:'手書きの線',text:'文字',icon:'アイコン',cloud:'雲',area:'範囲',cmark:'丸文字マーク',warp:'ゆがみ点（等圧線）',isoline:'等圧線（線）',isobars:'等圧線（自動）',station:'観測点'};
+  const TYPE_NAME={high:'高気圧',low:'低気圧',typhoon:'台風',front:'前線',arrow:'矢印・線',ink:'手書きの線',text:'文字',icon:'アイコン',cloud:'雲',area:'範囲',cmark:'丸文字マーク',warp:'ゆがみ点（等圧線）',isoline:'等圧線（線）',isobars:'等圧線（自動）',station:'観測点',rainbow:'虹'};
   const FADE_OPTS=[['none','なし'],['r','→ 右へ'],['l','← 左へ'],['u','↑ 上へ'],['d','↓ 下へ'],['ur','↗ 右上へ'],['ul','↖ 左上へ'],['dr','↘ 右下へ'],['dl','↙ 左下へ']];
   const FADE_DEFS=[{k:'op',t:'range',label:'濃さ',min:0,max:100,step:5,unit:'%',dflt:100},
     {k:'fade',t:'select',label:'片側をうすく（うすくなっていく向き）',opts:FADE_OPTS,dflt:'none'},
@@ -2625,6 +2677,7 @@ function startOperator(){
       case 'area': return [{k:'label',t:'textarea',label:'中に書く文字（空でもOK）'}].concat(WRAP_DEFS,[{k:'font',t:'select',label:'中の文字のフォント',opts:FONT_OPTS,dflt:'gothic'}],DEFS.area);
       case 'cloud': return [{k:'widthKm',t:'range',label:'筆の太さ・雲の粒',min:80,max:700,step:10,unit:'km'}].concat(CLOUD_EXTRA).concat(CLOUD_LABEL);
       case 'cmark': return DEFS.cmark;
+      case 'rainbow': return DEFS.rainbow.concat([{k:'rise',t:'range',label:'アーチの高さ',min:0.05,max:1.2,step:0.01,dflt:0.35,fmt:v=>Math.round(v*100),unit:'%'}]);
       case 'station': return DEFS.station;
       case 'warp': if(it.kind==='pull') return [{k:'rKm',t:'range',label:'引っぱる広さ（小さいと そこだけ出っぱる）',min:100,max:1500,step:20,unit:'km'}];
         return [{k:'dp',t:'range',label:'ゆがみの強さ（＋ふくらむ／−へこむ）',min:-16,max:16,step:1,unit:'hPa'},{k:'rKm',t:'range',label:'ゆがみの広さ',min:100,max:1200,step:20,unit:'km'}];
@@ -2674,7 +2727,7 @@ function startOperator(){
     h+=`<div class="row"><button class="btn sm" data-act="copy">コピー</button><button class="btn sm danger" data-act="del">削除</button></div>`;
     propsEl.innerHTML=h; bindZ(propsEl);
     bindFields(propsEl,it,defs,(k)=>{ normalize(it); commit(); if(k==='kink' && it.kink){ if(it.kinkA==null) it.kinkA=0.2; if(it.kinkB==null) it.kinkB=0.8; if(!state.isobar.on) toast('等圧線を表示すると、折れ目が見えます'); }
-      if(k==='style'||k==='precip'||k==='fade'||k==='labelWrap'||k==='kink'){ if(k==='labelWrap' && it.labelPos==null) it.labelPos=(it.type==='cloud'&&it.mode!=='lasso')?0.5:0; renderProps(); } },true);
+      if(k==='style'||k==='precip'||k==='fade'||k==='labelWrap'||k==='kink'||k==='thunder'||k==='toneP'){ if(k==='labelWrap' && it.labelPos==null) it.labelPos=(it.type==='cloud'&&it.mode!=='lasso')?0.5:0; renderProps(); } },true);
     propsEl.querySelectorAll('[data-act]').forEach(el=>el.onclick=()=>{
       const a=el.dataset.act;
       if(a==='del') removeSel();
@@ -2770,6 +2823,10 @@ function startOperator(){
         if(isoOn && isobarChains(c,state).some(ch=>distPoly(P,ch.pts)<tol)){ isoClick=[sx,sy]; return it; }
         continue;
       }
+      if(it.type==='rainbow'){
+        const G=rainbowGeom(c,it); if(G && distPoly(P,G.poly)<tol+G.half) return it;
+        continue;
+      }
       if(it.type==='isoline'){
         if(distPoly(P,isolinePath(c,it))<tol+3*k) return it;
         continue;
@@ -2826,6 +2883,7 @@ function startOperator(){
   function itemBox(it,c){
     const k=c.k, d=dpr();
     if(it.type==='isobars'){ const p=isoClick||[c.W/2,c.H/2]; return [p[0]-10*d,p[1]-10*d,p[0]+10*d,p[1]+10*d]; }
+    if(it.type==='rainbow'){ const G=rainbowGeom(c,it); if(!G) return [0,0,1,1]; let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity; for(const q of G.poly){ x0=Math.min(x0,q[0]); x1=Math.max(x1,q[0]); y0=Math.min(y0,q[1]); y1=Math.max(y1,q[1]); } return [x0-G.half,y0-G.half,x1+G.half,y1+G.half]; }
     if(it.type==='station'){ const [x,y]=c.toS(it.lon,it.lat), r=(it.size||56)*k*0.25+6*d; return [x-r,y-r,x+r,y+r]; }
     if(it.pts && it.pts.length){
       const sp=it.pts.map(p=>c.toS(p[0],p[1]));
@@ -2866,6 +2924,12 @@ function startOperator(){
   function handlesOf(it,c){
     const H=[];
     if(!it) return H;
+    if(it.type==='rainbow'){
+      const G=rainbowGeom(c,it);
+      it.pts.forEach((q,i)=>{ const p2=c.toS(q[0],q[1]); H.push({k:'v',i,x:p2[0],y:p2[1]}); });
+      if(G) H.push({k:'rh',x:G.apex[0],y:G.apex[1]});
+      return H;
+    }
     const editCloud=it.type==='cloud' && it.mode!=='erase' && it.pts.length<=60;
     if(it.type==='front'||it.type==='arrow'||(it.type==='area'&&it.shape==='blob')||editCloud||it.type==='isoline'){
       const sp=it.pts.map(p=>c.toS(p[0],p[1])), closed=it.type==='area'||(it.type==='cloud'&&it.mode==='lasso')||(it.type==='isoline'&&it.closed), n=sp.length;
@@ -3035,6 +3099,13 @@ function startOperator(){
       return;
     }
     if(tool==='text'){ drag={mode:'textNew', sx, sy, ll:[lon,lat]}; return; }
+    if(tool==='rainbow'){
+      pushHistory();
+      const it={id:uid(),type:'rainbow',pts:[[lon,lat],[lon,lat]],rise:0.35,colors:opts.rainbow.colors,bandW:opts.rainbow.bandW};
+      state.items.push(it); made(it); commit();
+      drag={mode:'rainbowNew', id:it.id, sx, sy};
+      return;
+    }
     if(tool==='ellipse'){
       pushHistory();
       const it={id:uid(),type:'area',shape:'ellipse',lon,lat,rxKm:1,ryKm:1,rot:0,color:opts.area.color,alpha:opts.area.alpha,edge:opts.area.edge,font:opts.area.font,label:''};
@@ -3056,7 +3127,7 @@ function startOperator(){
       pushHistory();
       const it=o.mode==='erase'
         ? {id:uid(),type:'cloud',mode:'erase',widthKm:o.widthKm,pts:[[lon,lat]]}
-        : {id:uid(),type:'cloud',mode:'brush',tone:o.tone,widthKm:o.widthKm,relief:o.relief,shadow:o.shadow,precip:o.precip,rainLevel:o.rainLevel,snowLevel:o.snowLevel,thunder:o.thunder,pts:[[lon,lat]]};
+        : {id:uid(),type:'cloud',mode:'brush',toneV:o.toneV,widthKm:o.widthKm,relief:o.relief,shadow:o.shadow,precip:o.precip,rainLevel:o.rainLevel,snowLevel:o.snowLevel,thunder:o.thunder,thSize:o.thSize,thFreq:o.thFreq,pts:[[lon,lat]]};
       state.items.push(it); commit();
       drag={mode:'pen', id:it.id, last:[sx,sy], shift:e.shiftKey};
       return;
@@ -3071,7 +3142,7 @@ function startOperator(){
           pushHistory(); drag={mode:'vertex', id:it.id, vi:h.i}; return;
         }
         if(h.k==='m'){ pushHistory(); it.pts.splice(h.i+1,0,[lon,lat]); commit(); drag={mode:'vertex', id:it.id, vi:h.i+1}; return; }
-        if(h.k==='ex'||h.k==='ey'||h.k==='ix'||h.k==='iy'||h.k==='lp'||h.k==='ka'||h.k==='kb'){ pushHistory(); drag={mode:h.k, id:it.id}; return; }
+        if(h.k==='ex'||h.k==='ey'||h.k==='ix'||h.k==='iy'||h.k==='lp'||h.k==='ka'||h.k==='kb'||h.k==='rh'){ pushHistory(); drag={mode:h.k, id:it.id}; return; }
         if(h.k==='fv'||h.k==='fr'||h.k==='pv'){
           if(h.k==='pv' && e.altKey){ pushHistory(); it.past.splice(h.i,1); commit(); return; }
           pushHistory(); drag={mode:h.k, id:it.id, i:h.i}; return;
@@ -3174,6 +3245,12 @@ function startOperator(){
       if(drag.mode==='ix'){ it.isoRx=Math.max(150,Math.hypot(dx,dy)/ppk); it.isoRot=Math.atan2(dy,dx); if(it.isoRy==null) it.isoRy=ISO_R[it.type]; }
       else{ const a=it.isoRot||0; it.isoRy=Math.max(150,Math.abs(-dx*Math.sin(a)+dy*Math.cos(a))/ppk); if(it.isoRx==null) it.isoRx=ISO_R[it.type]; }
       commit();
+    }else if(drag.mode==='rainbowNew'){
+      const it=getItem(drag.id); if(!it) return;
+      it.pts[1]=c.toLL(sx,sy); commit();
+    }else if(drag.mode==='rh'){
+      const it=getItem(drag.id), G=it&&rainbowGeom(c,it); if(!G) return;
+      it.rise=clamp(((sx-G.M[0])*G.nx+(sy-G.M[1])*G.ny)/G.c,0.05,1.2); commit();
     }else if(drag.mode==='ex'||drag.mode==='ey'||drag.mode==='ellipseNew'){
       const it=getItem(drag.id); if(!it) return;
       const [x,y]=c.toS(it.lon,it.lat), ppk=c.pxPerKm(it.lat), dx=sx-x, dy=sy-y;
@@ -3199,7 +3276,12 @@ function startOperator(){
       drag=null; updateCursor(); return;
     }
     if(drag){
-      if(drag.mode==='ellipseNew'){
+      if(drag.mode==='rainbowNew'){
+        const it=getItem(drag.id), c=cam();
+        if(it){ const a=c.toS(it.pts[0][0],it.pts[0][1]), b=c.toS(it.pts[1][0],it.pts[1][1]);
+          if(Math.hypot(b[0]-a[0],b[1]-a[1])<30*dpr()){ it.pts[1]=c.toLL(a[0]+300*c.k,a[1]); commit(); } }
+        setTool('select');
+      }else if(drag.mode==='ellipseNew'){
         const it=getItem(drag.id);
         if(it && it.rxKm<40){ it.rxKm=320; it.ryKm=220; commit(); }
         setTool('select');
@@ -3209,7 +3291,7 @@ function startOperator(){
           const o=opts.cloud;
           const c=cam(), per=measure(drag.pts.map(p=>c.toS(p[0],p[1]))).pop()||1;
           const pts=simplifyPts(c,drag.pts,Math.max(4*dpr(),per*0.012),16,true);
-          const it={id:uid(),type:'cloud',mode:'lasso',tone:o.tone,widthKm:o.widthKm,relief:o.relief,shadow:o.shadow,precip:o.precip,rainLevel:o.rainLevel,snowLevel:o.snowLevel,thunder:o.thunder,pts};
+          const it={id:uid(),type:'cloud',mode:'lasso',toneV:o.toneV,widthKm:o.widthKm,relief:o.relief,shadow:o.shadow,precip:o.precip,rainLevel:o.rainLevel,snowLevel:o.snowLevel,thunder:o.thunder,thSize:o.thSize,thFreq:o.thFreq,pts};
           state.items.push(it); made(it);
           commit();
         }
@@ -3338,8 +3420,9 @@ function startOperator(){
       else if(i.type==='typhoon'){ i.ringW=5; i.trackW=100; }
       else if(i.type==='arrow') i.width=12;
       else if(i.type==='isoline') i.w=1.7;
+      else if(i.type==='rainbow') i.bandW=8;
     }
-    state.isobar.width=1.7; opts.arrow.width=12;
+    state.isobar.width=1.7; opts.arrow.width=12; opts.rainbow.bandW=8;
     commit(); renderProps(); renderToolOpts(); toast('線の太さを全部もとに戻しました');
   };
   $('fontAllBtn').onclick=()=>{
