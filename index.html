@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.26</title>
+<title>天気図スタジオ v0.29</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -122,7 +122,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.26 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.29 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -158,6 +158,15 @@ body.display.idle{cursor:none}
 
     <div class="sec">
       <h2>地図</h2>
+      <div class="box" id="paperBox" style="margin:0 0 10px">
+        <div style="font-weight:700;font-size:13px;margin-bottom:4px">🖍 お絵かきモード（画像の上に描く）</div>
+        <div style="font-size:12px;color:var(--sub);margin-bottom:6px">気象庁の天気図や衛星画像などの PNG・JPG を背景にして、その上に前線や台風を描けます。</div>
+        <div class="row"><button class="btn sm" id="paperPick">🖼 画像を選ぶ</button><button class="btn sm danger" id="paperDel">画像をはずす</button></div>
+        <input type="file" id="paperIn" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+        <label class="c"><input type="checkbox" id="paperOn"> 画像を背景にする（地図は消える）</label>
+        <label class="f">出典（右下に出る文字）<input type="text" id="paperCredit" placeholder="出典：気象庁ホームページ"></label>
+        <div id="paperNote" style="font-size:12px;color:var(--sub)"></div>
+      </div>
       <label class="f">図法<select id="proj"><option value="merc">メルカトル図法</option><option value="lcc">ランベルト正角円錐図法（天気図ふう）</option></select></label>
       <label class="f">背景地図<select id="basemap"></select></label>
       <label class="c"><input type="checkbox" id="grid"> 緯線・経線</label>
@@ -1955,6 +1964,7 @@ const TW_KEYS=['kinkA','kinkB','kinkS','op','fadeW','labelGap','labelPos','label
 const GROWS=['front','arrow','ink','rainbow'];
 function tweenState(A,B,t){
   const out=Object.assign({},B);
+  if(B.haze){ const a0=A.haze&&A.haze.color===B.haze.color?A.haze.amount||0:0; out.haze=Object.assign({},B.haze,{amount:a0+((B.haze.amount||0)-a0)*t}); }
   out.view={lon:A.view.lon+(B.view.lon-A.view.lon)*t, lat:A.view.lat+(B.view.lat-A.view.lat)*t, z:A.view.z+(B.view.z-A.view.z)*t};
   const amap=new Map(A.items.filter(i=>!i._dead).map(i=>[i.id,i]));
   const items=[];
@@ -2036,13 +2046,67 @@ function drawLayered(ctx,cam,it,drawFn){
   }
   ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=a; ctx.drawImage(L,0,0); ctx.restore();
 }
+/* ---- お絵かきモード：読み込んだ画像を背景にする（画像はページ全体で1枚） ---- */
+const PAPER={on:false,id:null,credit:''};          // いまの設定（操作画面・表示画面それぞれで持つ）
+const PAPER_IMG=new Map();                          // id → {img, ok}
+function setPaperSrc(id,src){
+  if(!id||!src||PAPER_IMG.has(id)) return;
+  const img=new Image(), e={img,ok:false}; PAPER_IMG.set(id,e);
+  img.onload=()=>{ e.ok=true; }; img.src=src;
+}
+function paperImg(){ const e=PAPER.id&&PAPER_IMG.get(PAPER.id); return e&&e.ok?e.img:null; }
+/* 画像が画面のどこに入るか（全体が見えるように、まん中に置く） */
+function paperRect(W,H){
+  const img=paperImg(); if(!img) return null;
+  const sc=Math.min(W/img.naturalWidth,H/img.naturalHeight), w=img.naturalWidth*sc, h=img.naturalHeight*sc;
+  return {x:(W-w)/2, y:(H-h)/2, w, h, sc, nw:img.naturalWidth, nh:img.naturalHeight};
+}
+function drawPaper(ctx,W,H){
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
+  const r=paperRect(W,H); if(!r) return;
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(paperImg(),r.x,r.y,r.w,r.h);
+}
+/* ---- モヤ：背景の上に白か黒の膜をかけ、モヤ消し（hazecut）の所だけ晴らす ---- */
+const HAZE_CV=document.createElement('canvas');
+function hazeColor(H){ return H.color==='black' ? '0,0,0' : '255,255,255'; }
+function drawHaze(ctx,cam,st,W,H){
+  const Hz=st.haze; if(!Hz || !(Hz.amount>0)) return;
+  if(HAZE_CV.width!==W||HAZE_CV.height!==H){ HAZE_CV.width=W; HAZE_CV.height=H; }
+  const g=HAZE_CV.getContext('2d'), k=cam.k;
+  g.setTransform(1,0,0,1,0,0); g.globalCompositeOperation='source-over'; g.globalAlpha=1;
+  g.shadowColor='transparent'; g.shadowBlur=0; g.shadowOffsetX=0; g.shadowOffsetY=0;
+  g.clearRect(0,0,W,H);
+  g.fillStyle=`rgba(${hazeColor(Hz)},${clamp(Hz.amount,0,95)/100})`; g.fillRect(0,0,W,H);
+  g.globalCompositeOperation='destination-out';
+  const OFF=W+H+5000;   // 形は画面の外に描き、ぼかした影だけを画面に落とす
+  for(const it of st.items){
+    if(it.type!=='hazecut' || !it.pts || !it.pts.length) continue;
+    const sp=it.pts.map(q=>cam.toS(q[0],q[1]));
+    g.globalAlpha=(it._a==null?1:clamp(it._a,0,1))*clamp((it.op??100)/100,0,1);
+    const blur=clamp(it.soft??40,0,100)*0.6*k;
+    g.shadowColor='rgba(0,0,0,1)'; g.shadowBlur=blur; g.shadowOffsetX=OFF; g.shadowOffsetY=0;
+    g.beginPath(); sp.forEach((q,i)=>i?g.lineTo(q[0]-OFF,q[1]):g.moveTo(q[0]-OFF,q[1]));
+    if(it.mode==='lasso'){ g.closePath(); g.fillStyle='#000'; g.fill(); }
+    else{
+      if(sp.length===1) g.lineTo(sp[0][0]-OFF+0.01,sp[0][1]);
+      g.lineCap='round'; g.lineJoin='round'; g.strokeStyle='#000';
+      g.lineWidth=Math.max(1,(it.widthKm||300)*cam.pxPerKm(it.pts[0][1])); g.stroke();
+    }
+  }
+  ctx.save(); ctx.globalAlpha=1; ctx.drawImage(HAZE_CV,0,0); ctx.restore();
+}
 function render(ctx,W,H,st,o={}){
   const cam = makeCam(st.view,W,H,projOf(st)), k=cam.k, time=o.time||0, anim=st.anim!==false;
   ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=1;
   ctx.fillStyle='#dfe7ee'; ctx.fillRect(0,0,W,H);
-  const bm = baseOf(st), B=BASEMAPS[bm];
-  drawBase(ctx,cam,st,B);
-  if(st.grid) drawGrid(ctx,cam,!!B.simple,mapOptsOf(st));
+  const bm = baseOf(st), B=BASEMAPS[bm], paperOn=PAPER.on&&!!PAPER.id;
+  if(paperOn) drawPaper(ctx,W,H);
+  else{
+    drawBase(ctx,cam,st,B);
+    if(st.grid) drawGrid(ctx,cam,!!B.simple,mapOptsOf(st));
+  }
+  drawHaze(ctx,cam,st,W,H);
 
   const items = st.items;
   const isoOn=st.isobar && st.isobar.on;
@@ -2064,7 +2128,7 @@ function render(ctx,W,H,st,o={}){
       continue;
     }
     n++;
-    if(it.type==='warp') continue;
+    if(it.type==='warp' || it.type==='hazecut') continue;
     if(it.type==='isobars'){ if(isoOn){ ctx.save(); ctx.globalAlpha=it._a==null?1:clamp(it._a,0,1); drawIsobars(ctx,cam,st,isoAvoid()); ctx.restore(); } continue; }
     const grow = it._grow==null ? 1 : clamp(it._grow,0,1);
     const body=ctx=>{
@@ -2096,7 +2160,8 @@ function render(ctx,W,H,st,o={}){
   }
   ctx.globalAlpha=1;
   ctx.font=`${15*k}px ${JP_FONT}`; ctx.textAlign='right'; ctx.textBaseline='bottom';
-  haloText(ctx, BASEMAPS[bm].attr+(mapOptsOf(st).pref?'／県境：地球地図日本（国土地理院）':''), W-10*k, H-8*k, 'rgba(30,40,50,.8)', 'rgba(255,255,255,.8)', 4*k);
+  if(paperOn){ const pr=paperRect(W,H)||{x:0,y:0,w:W,h:H}; if(PAPER.credit) haloText(ctx, PAPER.credit, pr.x+pr.w-10*k, pr.y+pr.h-8*k, 'rgba(30,40,50,.85)', 'rgba(255,255,255,.85)', 4*k); }
+  else haloText(ctx, BASEMAPS[bm].attr+(mapOptsOf(st).pref?'／県境：地球地図日本（国土地理院）':''), W-10*k, H-8*k, 'rgba(30,40,50,.8)', 'rgba(255,255,255,.8)', 4*k);
   if(o.overlay) o.overlay(ctx,cam);
   return cam;
 }
@@ -2145,7 +2210,9 @@ function startDisplay(){
   addEventListener('resize',fit); fit();
 
   Link.on(m=>{
+    if(m.t==='paper'){ if(m.id&&m.src) setPaperSrc(m.id,m.src); return; }
     if(m.t==='state' && m.s){
+      if(m.s.paper){ Object.assign(PAPER,m.s.paper); if(PAPER.on && PAPER.id && !PAPER_IMG.has(PAPER.id)) Link.send({t:'needPaper', id:PAPER.id}); }
       const now=performance.now();
       const shown = tween ? clone(tweenNow(now)) : cur;
       target=m.s;
@@ -2175,6 +2242,8 @@ function startDisplay(){
   function smooth(dt){
     const f=1-Math.exp(-dt*9);
     cur.basemap=target.basemap; cur.grid=target.grid; cur.anim=target.anim; cur.isobar=target.isobar; cur.mapOpts=target.mapOpts;
+    { const th=target.haze||{amount:0,color:'white'}, ch=cur.haze||{amount:0,color:th.color};
+      cur.haze=Object.assign({},th,{amount: ch.color===th.color ? ch.amount+(th.amount-ch.amount)*f : th.amount}); }
     for(const key of ['lon','lat','z']) cur.view[key]+=(target.view[key]-cur.view[key])*f;
     const old=new Map(cur.items.filter(i=>!i._dead).map(i=>[i.id,i]));
     const dying=cur.items.filter(i=>i._dead);
@@ -2196,7 +2265,7 @@ function startDisplay(){
           }else c.pts=clone(t.pts);
         }
       }
-      c._a=Math.min(1,(c._a==null?1:c._a)+dt*3.5);
+      c._a=Math.min(1,(c._a==null?1:c._a)+dt*(c.type==='hazecut'?1.4:3.5));
       if(c._grow!=null && c._grow<1) c._grow=Math.min(1,c._grow+dt/0.9);
       next.push(c);
     }
@@ -2261,6 +2330,14 @@ function startOperator(){
     return s;
   }
   let state = migrate(loadSaved() || defaultState());
+  const PAPER_KEY='tenkizu-studio-paper';
+  let paperSrc=null;
+  state.paper=Object.assign({on:false,id:null,credit:'出典：気象庁ホームページ'},state.paper||{});
+  try{ const sv=JSON.parse(localStorage.getItem(PAPER_KEY)||'null'); if(sv && sv.id===state.paper.id && sv.src){ paperSrc=sv.src; setPaperSrc(sv.id,sv.src); } }catch(e){}
+  if(!paperSrc){ state.paper.on=false; state.paper.id=null; }
+  state.haze=Object.assign({amount:0,color:'white'},state.haze||{});
+  const syncPaper=()=>Object.assign(PAPER,state.paper);
+  syncPaper();
   if(!BASEMAPS[state.basemap]) state.basemap='simple';
   if(state.anim==null) state.anim=true;
   if(!Array.isArray(state.scenes)) state.scenes=[];
@@ -2284,6 +2361,7 @@ function startOperator(){
     pen:{color:'#e03a3a', width:6},
     text:{color:'#1d2733', size:48, bold:true, font:'gothic'},
     area:{color:'#2f6fe0', alpha:0.3, edge:'line', font:'gothic'},
+    haze:{mode:'brush', widthKm:300, soft:40},
     cloud:{mode:'brush', widthKm:260, toneV:0, relief:true, shadow:false, precip:'none', rainLevel:2, snowLevel:2, thunder:false, thSize:60, thFreq:'2'},
     rainbow:{colors:'7', bandW:8},
     cmark:{char:'暑', color:'#e03a3a', textColor:'#ffffff', size:72, font:'gothic'},
@@ -2311,6 +2389,7 @@ function startOperator(){
     {id:'cmark', mk:'<span style="color:#e03a3a">●</span>', label:'丸文字'},
     {id:'isoline', mk:'<span style="color:#4a5560">〜</span>', label:'等圧線(手)'},
     {id:'station', mk:'⦶', label:'観測点'},
+    {id:'haze', mk:'<span style="color:#7a8a9a">◐</span>', label:'モヤ消し'},
     {id:'rainbow', mk:'<span style="background:linear-gradient(#e5322d,#ffd21a,#3cb44b,#2f7de1);-webkit-background-clip:text;background-clip:text;color:transparent">⌒</span>', label:'虹'}
   ];
 
@@ -2389,6 +2468,9 @@ function startOperator(){
     area:[{k:'color',t:'color'},{k:'alpha',t:'range',label:'濃さ',min:0.08,max:0.8,step:0.02,fmt:pct,unit:'%'},{k:'edge',t:'select',label:'ふち',opts:[['line','線あり'],['none','線なし'],['soft','ふわっとぼかす']]}],
     cloud:[{k:'mode',t:'seg',opts:[['brush','筆でなぞる'],['lasso','囲んで塗る'],['erase','雲消しゴム']]},{k:'widthKm',t:'range',label:'筆の太さ・雲の粒',min:80,max:700,step:10,unit:'km'}].concat(CLOUD_EXTRA),
     mark:[STYLE_SEL,FONT_SEL],
+    haze:[{k:'mode',t:'seg',label:'晴らしかた',opts:[['brush','筆でなぞる'],['lasso','ぐるっと囲む']]},
+      {k:'widthKm',t:'range',label:'筆の太さ',min:20,max:1500,step:10,unit:'km',when:o=>o.mode!=='lasso'},
+      {k:'soft',t:'range',label:'ふちのぼかし',min:0,max:100,step:5,dflt:40,reset:true}],
     rainbow:[{k:'colors',t:'seg',label:'色の数',opts:[['7','7色'],['4','4色']],dflt:'7'},{k:'bandW',t:'range',label:'帯の太さ',min:2,max:30,step:1,dflt:8,reset:true}],
     isoline:[{k:'level',t:'number',label:'気圧（hPa）20の倍数は太線',min:880,max:1080,step:2},{k:'color',t:'color'}],
     station:[{k:'sym',t:'select',label:'天気',opts:SYMS.map(([k2,n])=>[k2,n])},{k:'dir',t:'select',label:'風向（風が吹いてくる方角）',opts:DIR16.map((n,i)=>[String(i),n])},{k:'force',t:'range',label:'風力',min:0,max:12,step:1},{k:'temp',t:'text',label:'気温（左に表示）',max:6},{k:'pres',t:'text',label:'気圧（右に表示）',max:6},{k:'size',t:'range',label:'大きさ',min:30,max:240,step:2}],
@@ -2557,6 +2639,7 @@ function startOperator(){
     cmark:'丸の中の文字を決めて、地図をクリックで置く（暑・湿・寒・Aなど1〜3文字）。',
     isoline:'クリックで点を打つ → 最後の点をもう一度クリックで確定。最初の点をクリックすると輪っかに。',
     station:'地図をクリックで置く。天気・風向・風力・気温・気圧は吹き出しで。',
+    haze:'モヤ（白か黒の膜）を画面にかけて、なぞった所・囲んだ所だけ晴らします。見せたい所を目立たせるのに。描き終わると「選択・移動」に戻ります（Shiftで続けて）。',
     rainbow:'ドラッグで虹の両はしを決める。選ぶと出る真ん中の点で、アーチの高さを変えられます。',
     warp:'等圧線をゆがませる点を置く場所をクリック。置いたらドラッグで動かせます（表示画面には出ません）。'
   };
@@ -2574,13 +2657,30 @@ function startOperator(){
     if(defs) h+=fieldsHTML(defs,obj);
     if(g==='eraser') h+=`<div class="row"><button class="btn sm danger" id="inkClear">手書きを全部消す</button></div>`;
     if(g==='cloud') h+=`<div class="row"><button class="btn sm danger" id="cloudClear">雲を全部消す</button></div>`;
+    if(g==='haze'){
+      const Hz=state.haze;
+      h=`<p class="note">${TOOL_HINT.haze}</p>
+        <div class="box" style="margin:0 0 8px">
+          <label class="f">モヤの濃さ：<b id="hzAmtV">${Math.round(Hz.amount)}</b>%<input type="range" id="hzAmt" min="0" max="90" step="5" value="${Hz.amount}"></label>
+          <div class="row"><span style="font-size:12px;color:var(--sub)">モヤの色</span>
+            <div class="seg sm" id="hzCol"><button data-v="white" class="${Hz.color!=='black'?'on':''}">白（うすく）</button><button data-v="black" class="${Hz.color==='black'?'on':''}">黒（暗く）</button></div></div>
+          <div class="row"><button class="btn sm" id="hzReset">モヤを全部戻す</button><button class="btn sm" id="hzOff">モヤをなくす</button></div>
+        </div>`+fieldsHTML(defs,obj);
+    }
     box.innerHTML=h;
+    if(g==='haze'){
+      $('hzAmt').oninput=e=>{ state.haze.amount=parseFloat(e.target.value); $('hzAmtV').textContent=Math.round(state.haze.amount); commit(); };
+      $('hzCol').querySelectorAll('button').forEach(b=>b.onclick=()=>{ state.haze.color=b.dataset.v; if(!(state.haze.amount>0)) state.haze.amount=50; commit(); renderToolOpts(); });
+      $('hzReset').onclick=()=>{ if(!state.items.some(i=>i.type==='hazecut')) return; pushHistory(); state.items=state.items.filter(i=>i.type!=='hazecut'); fixSel(); commit(); toast('晴らした所を全部消して、モヤを戻しました'); };
+      $('hzOff').onclick=()=>{ state.haze.amount=0; commit(); renderToolOpts(); toast('モヤをなくしました（晴らした所は残っています）'); };
+    }
     if(defs) bindFields(box,obj,defs,(k)=>{
       normalize(obj);
       const it=lastMade && sel.has(lastMade) && getItem(lastMade);
       const kk=k==='toneP'?'toneV':k;
       if(it && k!=='mode' && toolMatches(it)){ pushHistory(); it[kk]=clone(obj[kk]); normalize(it); commit(); renderProps(); }
-      if(k==='precip'||k==='thunder'||k==='toneP') renderToolOpts();
+      if(k==='precip'||k==='thunder'||k==='toneP'||(g==='haze'&&k==='mode')) renderToolOpts();
+      if(k==='mode') updateCursor();
     },false);
     const ic=$('inkClear'); if(ic) ic.onclick=()=>{ pushHistory(); state.items=state.items.filter(i=>i.type!=='ink'); fixSel(); commit(); };
     const cc=$('cloudClear'); if(cc) cc.onclick=()=>{ pushHistory(); state.items=state.items.filter(i=>i.type!=='cloud'); fixSel(); commit(); };
@@ -2588,7 +2688,7 @@ function startOperator(){
   function toolMatches(it){
     const g=toolGroup(tool);
     return (g==='cloud'&&it.type==='cloud'&&it.mode!=='erase') || (g==='pen'&&it.type==='ink') || (g==='arrow'&&it.type==='arrow')
-      || ((g==='ellipse'||g==='blob')&&it.type==='area') || (g==='text'&&it.type==='text') || (g==='mark'&&['high','low','typhoon'].includes(it.type)) || (g==='cmark'&&it.type==='cmark') || (g==='isoline'&&it.type==='isoline') || (g==='station'&&it.type==='station') || (g==='rainbow'&&it.type==='rainbow');
+      || ((g==='ellipse'||g==='blob')&&it.type==='area') || (g==='text'&&it.type==='text') || (g==='mark'&&['high','low','typhoon'].includes(it.type)) || (g==='cmark'&&it.type==='cmark') || (g==='isoline'&&it.type==='isoline') || (g==='station'&&it.type==='station') || (g==='rainbow'&&it.type==='rainbow') || (g==='haze'&&it.type==='hazecut');
   }
   function made(it){ lastMade=it.id; select(it.id); }
   function setTool(t){
@@ -2623,7 +2723,7 @@ function startOperator(){
     if(sel.has('isobars')){ state.isobar.on=false; renderIso(); }
     state.items=state.items.filter(i=>!sel.has(i.id) || i.type==='isobars'); sel.clear(); commit(); renderProps();
   }
-  const selectable=i=>!(i.type==='cloud' && i.mode==='erase') && !(i.type==='warp' && !(state.isobar && state.isobar.on)) && i.type!=='isobars';
+  const selectable=i=>!(i.type==='hazecut' && !(state.haze.amount>0)) && !(i.type==='cloud' && i.mode==='erase') && !(i.type==='warp' && !(state.isobar && state.isobar.on)) && i.type!=='isobars';
 
   /* ---------- コピー・貼り付け ---------- */
   function copySel(){ const items=selItems().filter(i=>i.type!=='isobars'); if(!items.length) return; clip=clone(items); pasteN=0; toast(`${items.length}個コピーしました`); }
@@ -2644,7 +2744,7 @@ function startOperator(){
   }
 
   /* ---------- 選択中のプロパティ ---------- */
-  const TYPE_NAME={high:'高気圧',low:'低気圧',typhoon:'台風',front:'前線',arrow:'矢印・線',ink:'手書きの線',text:'文字',icon:'アイコン',cloud:'雲',area:'範囲',cmark:'丸文字マーク',warp:'ゆがみ点（等圧線）',isoline:'等圧線（線）',isobars:'等圧線（自動）',station:'観測点',rainbow:'虹'};
+  const TYPE_NAME={high:'高気圧',low:'低気圧',typhoon:'台風',front:'前線',arrow:'矢印・線',ink:'手書きの線',text:'文字',icon:'アイコン',cloud:'雲',area:'範囲',cmark:'丸文字マーク',warp:'ゆがみ点（等圧線）',isoline:'等圧線（線）',isobars:'等圧線（自動）',station:'観測点',rainbow:'虹',hazecut:'モヤの晴れ間'};
   const FADE_OPTS=[['none','なし'],['r','→ 右へ'],['l','← 左へ'],['u','↑ 上へ'],['d','↓ 下へ'],['ur','↗ 右上へ'],['ul','↖ 左上へ'],['dr','↘ 右下へ'],['dl','↙ 左下へ']];
   const FADE_DEFS=[{k:'op',t:'range',label:'濃さ',min:0,max:100,step:5,unit:'%',dflt:100},
     {k:'fade',t:'select',label:'片側をうすく（うすくなっていく向き）',opts:FADE_OPTS,dflt:'none'},
@@ -2679,6 +2779,7 @@ function startOperator(){
       case 'cmark': return DEFS.cmark;
       case 'rainbow': return DEFS.rainbow.concat([{k:'rise',t:'range',label:'アーチの高さ',min:0.05,max:1.2,step:0.01,dflt:0.35,fmt:v=>Math.round(v*100),unit:'%'}]);
       case 'station': return DEFS.station;
+      case 'hazecut': return (it.mode==='lasso'?[]:[{k:'widthKm',t:'range',label:'筆の太さ',min:20,max:1500,step:10,unit:'km'}]).concat([{k:'soft',t:'range',label:'ふちのぼかし',min:0,max:100,step:5,dflt:40,reset:true}]);
       case 'warp': if(it.kind==='pull') return [{k:'rKm',t:'range',label:'引っぱる広さ（小さいと そこだけ出っぱる）',min:100,max:1500,step:20,unit:'km'}];
         return [{k:'dp',t:'range',label:'ゆがみの強さ（＋ふくらむ／−へこむ）',min:-16,max:16,step:1,unit:'hPa'},{k:'rKm',t:'range',label:'ゆがみの広さ',min:100,max:1200,step:20,unit:'km'}];
       case 'isoline': return [{k:'level',t:'number',label:'気圧（hPa）20の倍数は太線',min:880,max:1080,step:2},{k:'color',t:'color'},{k:'w',t:'range',label:'線の太さ（太線はこの2倍）',min:0.8,max:5,step:0.1,dflt:1.7,reset:true},{k:'thick',t:'check',label:'太い線'},{k:'label',t:'check',label:'数字を表示（白丸ドラッグで位置変更）',def:true},{k:'closed',t:'check',label:'閉じた線（輪）'}];
@@ -2712,7 +2813,7 @@ function startOperator(){
     $('popTitle').textContent= it ? (nameOf(it)||'設定') : '設定';
     if(!it){ if(setMode==='side') propsEl.innerHTML='<p class="empty">地図上のものをクリックすると、ここで設定できます。</p>'; return; }
     if(it.type==='isobars'){ renderIsoProps(propsEl); return; }
-    const defs=propDefs(it).concat(it.type==='warp'?[]:FADE_DEFS);
+    const defs=propDefs(it).concat(it.type==='warp'?[]:it.type==='hazecut'?[{k:'op',t:'range',label:'晴れ具合',min:0,max:100,step:5,unit:'%',dflt:100,reset:true}]:FADE_DEFS);
     let h=(setMode==='side'?`<p style="margin:0 0 8px;font-weight:600">${nameOf(it)||''}</p>`:'')+fieldsHTML(defs,it);
     if(it.type==='high'||it.type==='low') h+=`<div class="row"><button class="btn sm" data-act="swap">${it.type==='high'?'低気圧':'高気圧'}に切り替え</button></div>`;
     if(it.type==='front'||it.type==='arrow') h+=`<div class="row"><button class="btn sm" data-act="flip">向きを反転</button></div>`;
@@ -2817,8 +2918,18 @@ function startOperator(){
     const items=state.items.slice().reverse();   // 上に重なっているものから
     const isoOn=state.isobar && state.isobar.on;
     if(isoOn && warpVisible()) for(const it of items){ if(it.type==='warp'){ const [x,y]=c.toS(it.lon,it.lat); if(Math.hypot(sx-x,sy-y)<14*dpr()) return it; } }
+    const hazeHit=()=>{
+      if(!(state.haze.amount>0)) return null;
+      for(const it of items){
+        if(it.type!=='hazecut' || !it.pts.length) continue;
+        const sp=it.pts.map(p=>c.toS(p[0],p[1]));
+        if(it.mode==='lasso'){ if(sp.length>2 && inPoly(P,sp)) return it; }
+        else if(distPoly(P,sp)<Math.max(tol,(it.widthKm||300)*c.pxPerKm(it.pts[0][1])/2)) return it;
+      }
+      return null;
+    };
     for(const it of items){
-      if(it.type==='warp') continue;
+      if(it.type==='warp' || it.type==='hazecut') continue;
       if(it.type==='isobars'){
         if(isoOn && isobarChains(c,state).some(ch=>distPoly(P,ch.pts)<tol)){ isoClick=[sx,sy]; return it; }
         continue;
@@ -2876,7 +2987,7 @@ function startOperator(){
       else if(it.type==='high'||it.type==='low'){ if(Math.abs(sx-x)<Math.max(48*k,tol) && sy>y-100*k && sy<y+56*k) return it; }
       else if(it.type==='typhoon'){ if(Math.hypot(sx-x,sy-y)<Math.max(42*k,tol*1.5)) return it; }
     }
-    return null;
+    return hazeHit();
   }
   /* 画面上の外枠（囲み選択・複数選択の枠用） */
   let isoClick=null;
@@ -2889,7 +3000,7 @@ function startOperator(){
       const sp=it.pts.map(p=>c.toS(p[0],p[1]));
       let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
       for(const [x,y] of sp){ x0=Math.min(x0,x); x1=Math.max(x1,x); y0=Math.min(y0,y); y1=Math.max(y1,y); }
-      const pad=(it.type==='cloud'&&it.mode!=='lasso')?it.widthKm*c.pxPerKm(it.pts[0][1])/2:8*d;
+      const pad=(it.type==='cloud'&&it.mode!=='lasso')||(it.type==='hazecut'&&it.mode!=='lasso')?(it.widthKm||300)*c.pxPerKm(it.pts[0][1])/2:8*d;
       return [x0-pad,y0-pad,x1+pad,y1+pad];
     }
     const [x,y]=c.toS(it.lon,it.lat);
@@ -2924,6 +3035,7 @@ function startOperator(){
   function handlesOf(it,c){
     const H=[];
     if(!it) return H;
+    if(it.type==='hazecut') return H;
     if(it.type==='rainbow'){
       const G=rainbowGeom(c,it);
       it.pts.forEach((q,i)=>{ const p2=c.toS(q[0],q[1]); H.push({k:'v',i,x:p2[0],y:p2[1]}); });
@@ -3121,6 +3233,16 @@ function startOperator(){
       return;
     }
     if(tool==='eraser'){ pushHistory(); drag={mode:'eraser', erased:0}; eraseAt(sx,sy); return; }
+    if(tool==='haze'){
+      const o=opts.haze;
+      if(!(state.haze.amount>0)){ state.haze.amount=50; renderToolOpts(); toast('モヤを50%にしました。なぞった所が晴れます'); }
+      if(o.mode==='lasso'){ drag={mode:'lasso', haze:true, pts:[[lon,lat]], last:[sx,sy], shift:e.shiftKey}; return; }
+      pushHistory();
+      const it={id:uid(),type:'hazecut',mode:'brush',widthKm:o.widthKm,soft:o.soft,pts:[[lon,lat]]};
+      state.items.push(it); commit();
+      drag={mode:'pen', id:it.id, last:[sx,sy], shift:e.shiftKey};
+      return;
+    }
     if(tool==='cloud'){
       const o=opts.cloud;
       if(o.mode==='lasso'){ drag={mode:'lasso', pts:[[lon,lat]], last:[sx,sy], shift:e.shiftKey}; return; }
@@ -3181,7 +3303,7 @@ function startOperator(){
       drag={mode:'marquee', sx, sy, ex:sx, ey:sy};
     }else{
       select(null);
-      drag={mode:'pan', sx, sy, startW:toW(state.view.lon,state.view.lat), wp:c.wp};
+      if(!state.paper.on) drag={mode:'pan', sx, sy, startW:toW(state.view.lon,state.view.lat), wp:c.wp};
     }
     updateCursor();
   });
@@ -3286,7 +3408,12 @@ function startOperator(){
         if(it && it.rxKm<40){ it.rxKm=320; it.ryKm=220; commit(); }
         setTool('select');
       }else if(drag.mode==='lasso'){
-        if(drag.pts.length>=3){
+        if(drag.haze && drag.pts.length>=3){
+          pushHistory();
+          const c=cam(), per=measure(drag.pts.map(p=>c.toS(p[0],p[1]))).pop()||1;
+          const it={id:uid(),type:'hazecut',mode:'lasso',soft:opts.haze.soft,pts:simplifyPts(c,drag.pts,Math.max(3*dpr(),per*0.008),16,true)};
+          state.items.push(it); made(it); commit();
+        }else if(!drag.haze && drag.pts.length>=3){
           pushHistory();
           const o=opts.cloud;
           const c=cam(), per=measure(drag.pts.map(p=>c.toS(p[0],p[1]))).pop()||1;
@@ -3301,6 +3428,10 @@ function startOperator(){
         if(it && it.type==='cloud' && it.mode==='brush' && it.pts.length>3){
           const c=cam(), w=it.widthKm*c.pxPerKm(it.pts[0][1]);
           it.pts=simplifyPts(c,it.pts,Math.max(4*dpr(),w*0.12),14,false); commit();
+        }
+        if(it && it.type==='hazecut' && it.pts.length>3){
+          const c=cam(), w=(it.widthKm||300)*c.pxPerKm(it.pts[0][1]);
+          it.pts=simplifyPts(c,it.pts,Math.max(3*dpr(),w*0.08),14,false); commit();
         }
         if(it && !(it.type==='cloud' && it.mode==='erase')) made(it);
         if(!drag.shift) setTool('select');
@@ -3329,6 +3460,7 @@ function startOperator(){
   },{passive:false});
 
   function zoomAt(sx,sy,dz){
+    if(state.paper.on){ toast('お絵かきモードのあいだは、地図の移動・ズームはできません'); return; }
     const c0=cam(), w=screenToW(c0,sx,sy);
     state.view.z=clamp(state.view.z+dz,4,10);
     const wp=256*Math.pow(2,state.view.z)*(cv.height/REF_H);
@@ -3379,7 +3511,7 @@ function startOperator(){
   }
   function updateCursor(){
     if(drag && drag.mode==='pan') cv.style.cursor='grabbing';
-    else if(tool==='pen'||tool==='eraser'||tool==='cloud') cv.style.cursor='none';
+    else if(tool==='pen'||tool==='eraser'||tool==='cloud'||(tool==='haze'&&opts.haze.mode!=='lasso')) cv.style.cursor='none';
     else if(tool==='text') cv.style.cursor='text';
     else if(tool!=='select') cv.style.cursor='crosshair';
     else cv.style.cursor = hoverHit ? 'move' : 'grab';
@@ -3452,7 +3584,11 @@ function startOperator(){
     return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
   }
   $('png').onclick=async()=>{
-    const W=1920, H=1080, c=makeCam(state.view,W,H,projOf(state));
+    // お絵かきモード：画像のところだけ切り取り、元の画像以上の細かさで書き出す
+    const pr0=state.paper.on && paperSrc ? paperRect(1920,1080) : null;
+    let S=1;
+    if(pr0){ S=Math.max(1, pr0.nw/pr0.w, pr0.nh/pr0.h); S=Math.min(S, 8000/1920, 8000/1080, Math.sqrt(40e6/(1920*1080))); }
+    const W=Math.round(1920*S), H=Math.round(1080*S), c=makeCam(state.view,W,H,projOf(state));
     toast('画像を作っています…');
     const off=document.createElement('canvas'); off.width=W; off.height=H;
     const octx=off.getContext('2d');
@@ -3462,15 +3598,77 @@ function startOperator(){
     for(const ts of baseTilesets(baseOf(state))) waits.push(...visibleTiles(c,ts).map(t=>getTile(ts,t.z,t.xx,t.y).p));
     await Promise.race([Promise.all(waits), new Promise(r=>setTimeout(r,6000))]);
     render(octx,W,H,state,{time:performance.now()/1000});
+    let outCv=off;
+    if(pr0){
+      const r=paperRect(W,H), x=Math.round(r.x), y=Math.round(r.y), w=Math.round(r.w), h=Math.round(r.h);
+      outCv=document.createElement('canvas'); outCv.width=w; outCv.height=h;
+      outCv.getContext('2d').drawImage(off,x,y,w,h,0,0,w,h);
+    }
     try{
-      off.toBlob(b=>{ if(b){ download(b,`tenkizu_${stamp()}.png`); toast('PNGを保存しました（1920×1080）'); } else toast('画像の作成に失敗しました'); },'image/png');
+      outCv.toBlob(b=>{ if(b){ download(b,`tenkizu_${stamp()}.png`); toast(`PNGを保存しました（${outCv.width}×${outCv.height}）`); } else toast('画像の作成に失敗しました'); },'image/png');
     }catch(err){ toast('地図の読み込みの関係で画像化できませんでした'); console.error(err); }
   };
   $('saveJson').onclick=()=>{
-    const data=JSON.stringify({app:'tenkizu-studio', v:6, view:state.view, basemap:state.basemap, grid:state.grid, anim:state.anim, items:state.items, isobar:state.isobar, mapOpts:state.mapOpts, zfree:true, scenes:state.scenes, cur:state.cur, sceneMode:state.sceneMode, sceneDur:state.sceneDur, sceneHold:state.sceneHold},null,1);
+    const data=JSON.stringify({app:'tenkizu-studio', v:6, view:state.view, basemap:state.basemap, grid:state.grid, anim:state.anim, items:state.items, isobar:state.isobar, mapOpts:state.mapOpts, zfree:true, scenes:state.scenes, cur:state.cur, sceneMode:state.sceneMode, sceneDur:state.sceneDur, sceneHold:state.sceneHold, paper:state.paper, paperSrc:paperSrc||null, haze:state.haze},null,1);
     download(new Blob([data],{type:'application/json'}),`tenkizu_${stamp()}.json`);
   };
   $('loadJson').onclick=()=>$('fileIn').click();
+  /* ---------- お絵かきモード ---------- */
+  function renderPaper(){
+    const P=state.paper, has=!!paperSrc;
+    $('paperOn').checked=!!P.on; $('paperOn').disabled=!has;
+    $('paperDel').disabled=!has;
+    $('paperCredit').value=P.credit||'';
+    $('paperNote').textContent = !has ? '画像はまだありません。' : (P.on ? 'いま画像の上に描いています。地図の移動・ズームと、下の地図の設定は使われません。' : '画像は読み込みずみ。チェックを入れると背景になります。');
+  }
+  function storePaper(){
+    try{ localStorage.removeItem(PAPER_KEY); if(paperSrc) localStorage.setItem(PAPER_KEY,JSON.stringify({id:state.paper.id,src:paperSrc})); return true; }
+    catch(e){ return false; }
+  }
+  function usePaper(src,on=true){
+    const id='p'+hashStr(src.length+':'+src.slice(0,2000)+src.slice(-2000)).toString(36);
+    paperSrc=src; setPaperSrc(id,src);
+    state.paper.id=id; state.paper.on=on;
+    if(on && state.isobar.on){ state.isobar.on=false; renderIso(); }   // 画像に等圧線はもう描いてあるので、自動の等圧線はいったん消す
+    Link.send({t:'paper', id, src});
+    const ok=storePaper();
+    syncPaper(); renderPaper(); commit();
+    return ok;
+  }
+  // 大きすぎる画像は長い辺 2560px まで縮める
+  function fileToSrc(f){
+    return new Promise((res,rej)=>{
+      const rd=new FileReader();
+      rd.onerror=()=>rej(); rd.onload=()=>{
+        const img=new Image();
+        img.onerror=()=>rej(); img.onload=()=>{
+          const MAX=2560, sc=Math.min(1,MAX/Math.max(img.naturalWidth,img.naturalHeight));
+          if(sc>=1 && rd.result.length<4e6) return res(rd.result);
+          const c=document.createElement('canvas'); c.width=Math.round(img.naturalWidth*sc); c.height=Math.round(img.naturalHeight*sc);
+          const g=c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,c.width,c.height); g.imageSmoothingQuality='high'; g.drawImage(img,0,0,c.width,c.height);
+          let out=c.toDataURL('image/png'); if(out.length>4e6) out=c.toDataURL('image/jpeg',0.9);
+          res(out);
+        };
+        img.src=rd.result;
+      };
+      rd.readAsDataURL(f);
+    });
+  }
+  $('paperPick').onclick=()=>$('paperIn').click();
+  $('paperIn').onchange=async e=>{
+    const f=e.target.files[0]; e.target.value=''; if(!f) return;
+    try{
+      const src=await fileToSrc(f);
+      pushHistory();
+      const ok=usePaper(src,true);
+      toast(ok ? '画像を背景にしました。上に描いてください' : '画像を背景にしました（大きいので、次に開いたときは自動で出ません。JSON 保存してください）');
+    }catch(err){ toast('この画像は読み込めませんでした'); }
+  };
+  $('paperOn').onchange=e=>{ if(!paperSrc){ e.target.checked=false; return; } state.paper.on=e.target.checked; if(state.paper.on && state.isobar.on){ state.isobar.on=false; renderIso(); } syncPaper(); renderPaper(); commit(); };
+  $('paperCredit').oninput=e=>{ state.paper.credit=e.target.value; syncPaper(); commit(); };
+  $('paperDel').onclick=()=>{ paperSrc=null; state.paper.on=false; state.paper.id=null; storePaper(); syncPaper(); renderPaper(); commit(); toast('画像をはずしました。地図にもどります'); };
+  renderPaper();
+
   $('fileIn').onchange=async e=>{
     const f=e.target.files[0]; e.target.value=''; if(!f) return;
     try{
@@ -3481,9 +3679,13 @@ function startOperator(){
       state.items=d.items; if(d.view) state.view=d.view; state.isobar=d.isobar; renderIso();
       state.mapOpts=Object.assign({},DEF_MAPOPTS,d.mapOpts||{}); renderMapOpts(); if(BASEMAPS[d.basemap]) state.basemap=d.basemap; state.grid=d.grid!==false;
       state.anim=d.anim!==false; renderAnim();
+      state.haze=Object.assign({amount:0,color:'white'},d.haze||{});
       state.scenes=Array.isArray(d.scenes)?d.scenes:[]; state.cur=state.scenes.length?Math.min(Math.max(0,d.cur|0),state.scenes.length-1):-1;
       state.sceneMode=d.sceneMode||'smooth'; state.sceneDur=d.sceneDur||1.2; state.sceneHold=d.sceneHold||3; hist.length=0; renderScenes();
-      bmSel.value=state.basemap; $('grid').checked=state.grid; select(null); commit();
+      bmSel.value=state.basemap; $('grid').checked=state.grid; select(null);
+      if(d.paperSrc && d.paper){ state.paper.credit=d.paper.credit||''; usePaper(d.paperSrc,!!d.paper.on); }
+      else{ paperSrc=null; state.paper.on=false; state.paper.id=null; storePaper(); syncPaper(); renderPaper(); }
+      commit();
       toast('読み込みました');
     }catch(err){ toast('このファイルは読み込めませんでした'); }
   };
@@ -3497,8 +3699,9 @@ function startOperator(){
     if(m.t==='hello'){
       const first = Date.now()-lastHello>4000;
       lastHello=Date.now();
-      if(first) Link.send({t:'state', s:payload()});
+      if(first){ if(paperSrc) Link.send({t:'paper', id:state.paper.id, src:paperSrc}); Link.send({t:'state', s:payload()}); }
     }
+    if(m.t==='needPaper' && paperSrc && m.id===state.paper.id) Link.send({t:'paper', id:state.paper.id, src:paperSrc});
   });
   setInterval(()=>{
     const ok=Date.now()-lastHello<4000, el=$('dispStatus');
@@ -3616,9 +3819,10 @@ function startOperator(){
       const x=Math.min(drag.sx,drag.ex), y=Math.min(drag.sy,drag.ey), w=Math.abs(drag.ex-drag.sx), h=Math.abs(drag.ey-drag.sy);
       ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h);
     }
-    if(cursor && (tool==='pen'||tool==='eraser'||tool==='cloud')){
+    if(cursor && (tool==='pen'||tool==='eraser'||tool==='cloud'||(tool==='haze'&&opts.haze.mode!=='lasso'))){
       let r;
-      if(tool==='pen') r=Math.max(opts.pen.width*k/2,3*d);
+      if(tool==='haze') r=opts.haze.widthKm*c.pxPerKm(c.toLL(cursor[0],cursor[1])[1])/2;
+      else if(tool==='pen') r=Math.max(opts.pen.width*k/2,3*d);
       else if(tool==='eraser') r=12*d;
       else r=opts.cloud.mode==='lasso'?5*d:opts.cloud.widthKm*c.pxPerKm(c.toLL(cursor[0],cursor[1])[1])/2;
       ctx.setLineDash(tool==='eraser'||(tool==='cloud'&&opts.cloud.mode==='erase')?[4*d,3*d]:[]);
@@ -3694,8 +3898,8 @@ function startOperator(){
   /* ---------- シーン ---------- */
   const scList=$('scList');
   let sceneSwitched=false, playT=null, thumbT=null;
-  const snapshot=()=>clone({view:state.view, basemap:state.basemap, grid:state.grid, isobar:state.isobar, items:state.items});
-  function payload(){ return {v:11, view:state.view, basemap:state.basemap, grid:state.grid, anim:state.anim, isobar:state.isobar, mapOpts:state.mapOpts, items:state.items}; }
+  const snapshot=()=>clone({view:state.view, basemap:state.basemap, grid:state.grid, isobar:state.isobar, haze:state.haze, items:state.items});
+  function payload(){ return {v:11, paper:state.paper, haze:state.haze, view:state.view, basemap:state.basemap, grid:state.grid, anim:state.anim, isobar:state.isobar, mapOpts:state.mapOpts, items:state.items}; }
   function drawThumb(cv2,snap){
     const W=cv2.width, H=cv2.height;
     render(cv2.getContext('2d'),W,H,Object.assign({anim:false,mapOpts:state.mapOpts},snap),{time:0});
@@ -3750,6 +3954,7 @@ function startOperator(){
     const sn=clone(state.scenes[i].snap);
     state.view=sn.view; state.basemap=BASEMAPS[sn.basemap]?sn.basemap:'simple'; state.grid=sn.grid!==false; state.items=sn.items||[];
     if(sn.isobar) state.isobar=sn.isobar; renderIso();
+    state.haze=Object.assign({amount:0,color:'white'},sn.haze||{});
     bmSel.value=state.basemap; $('grid').checked=state.grid;
     hist.length=0; sel.clear(); draft=null; drag=null;
     if(tool!=='select') setTool('select');
@@ -3840,7 +4045,7 @@ function startOperator(){
   let saveT=null;
   function loop(now){
     if(dirty){
-      dirty=false;
+      dirty=false; syncPaper();
       Link.send({t:'state', s:payload(), scene:sceneSwitched, mode:state.sceneMode, dur:state.sceneDur});
       // いま開いているシーンに、変更を自動で保存
       if(!sceneSwitched && state.cur>=0 && state.scenes[state.cur]){ state.scenes[state.cur].snap=snapshot(); refreshCurThumb(); }
