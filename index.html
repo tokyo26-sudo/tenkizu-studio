@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.29</title>
+<title>天気図スタジオ v0.30</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -122,7 +122,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.29 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.30 操作画面</small></h1>
 
     <div class="sec">
       <h2>表示画面（モニタ用）</h2>
@@ -1445,7 +1445,53 @@ function drawIcon(ctx,cam,it){
 
 /* ---- 文字 ---- */
 function textFont(it,k){ return fontStr(it.font,it.bold!==false,(it.size||48)*k,it.text); }
+/* 吹き出し：文字のまわりの形（角丸四角・楕円）としっぽ */
+const MEASURE_CTX=document.createElement('canvas').getContext('2d');
+const hasBubble=it=>it.type==='text' && (it.bubble==='round'||it.bubble==='ellipse');
+function bubbleGeom(ctx,cam,it){
+  const k=cam.k, s=(it.size||48)*k, lines=String(it.text||'').split('\n'), lh=s*1.25;
+  ctx.save(); ctx.font=textFont(it,k);
+  const tw=Math.max(1,...lines.map(l=>ctx.measureText(l).width)); ctx.restore();
+  const [x,y]=cam.toS(it.lon,it.lat), pad=clamp(it.bubPad??0.6,0,2)*s;
+  let w=tw+pad*2, h=lines.length*lh+pad*1.4;
+  if(it.bubble==='ellipse'){ w*=1.25; h*=1.35; }
+  const tails=(it.tails||[]).map(q=>cam.toS(q[0],q[1]));
+  return {x,y,w,h,s,k,tails,r:it.bubble==='ellipse'?0:Math.min(w,h)/2*clamp((it.bubRound??60)/100,0,1)};
+}
+function bubblePath(ctx,G,ellipse){
+  const {x,y,w,h,r}=G;
+  ctx.beginPath();
+  if(ellipse) ctx.ellipse(x,y,w/2,h/2,0,0,2*PI);
+  else if(ctx.roundRect) ctx.roundRect(x-w/2,y-h/2,w,h,r);
+  else ctx.rect(x-w/2,y-h/2,w,h);
+  // しっぽ：中心から先っぽへの細い三角（形と重ねて塗るので、根もとは自然につながる）
+  const bw=Math.min(w,h)*0.42;
+  for(const [tx,ty] of G.tails){
+    const dx=tx-x, dy=ty-y, L=Math.hypot(dx,dy); if(L<1) continue;
+    let nx=-dy/L*bw/2, ny=dx/L*bw/2;
+    // 形と同じ回りの向きにそろえる（逆向きだと重なった所が穴になる）
+    const A=[x+nx,y+ny], B=[x-nx,y-ny], area=(A[0]*ty-tx*A[1])+(tx*B[1]-B[0]*ty)+(B[0]*A[1]-A[0]*B[1]);
+    if(area<0){ nx=-nx; ny=-ny; }
+    ctx.moveTo(x+nx,y+ny); ctx.lineTo(tx,ty); ctx.lineTo(x-nx,y-ny); ctx.closePath();
+  }
+}
+function drawBubble(ctx,cam,it){
+  const G=bubbleGeom(ctx,cam,it), k=cam.k, ell=it.bubble==='ellipse';
+  const a=it._a==null?1:clamp(it._a,0,1);
+  ctx.save();
+  if(a<1){ const t=a-1, sc=1+2.2*t*t*t+1.2*t*t; ctx.translate(G.x,G.y); ctx.scale(sc,sc); ctx.translate(-G.x,-G.y); }   // ポンッと出る
+  ctx.lineJoin='round';
+  const fill=it.bubFill||'#ffffff';
+  if(it.bubShadow!==false){ ctx.save(); ctx.shadowColor='rgba(0,0,0,.35)'; ctx.shadowBlur=14*k; ctx.shadowOffsetY=4*k; bubblePath(ctx,G,ell); ctx.fillStyle=fill; ctx.fill(); ctx.restore(); }
+  if(it.bubEdge){ bubblePath(ctx,G,ell); ctx.strokeStyle=it.bubLine||'#1d2733'; ctx.lineWidth=(it.bubLineW??3)*2*k; ctx.stroke(); }
+  bubblePath(ctx,G,ell); ctx.fillStyle=fill; ctx.fill();
+  const lines=String(it.text||'').split('\n'), lh=G.s*1.25, y0=G.y-(lines.length-1)*lh/2;
+  ctx.font=textFont(it,k); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle=it.color||'#1d2733';
+  lines.forEach((ln,i)=>ctx.fillText(ln,G.x,y0+i*lh+G.s*0.04));
+  ctx.restore();
+}
 function drawText(ctx,cam,it){
+  if(hasBubble(it)) return drawBubble(ctx,cam,it);
   const [x,y]=cam.toS(it.lon,it.lat), s=(it.size||48)*cam.k;
   const lines=String(it.text||'').split('\n'), lh=s*1.25, y0=y-(lines.length-1)*lh/2;
   ctx.font=textFont(it,cam.k); ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -2008,6 +2054,11 @@ function itemExtent(cam,it){
       if(it.past) for(const q of it.past) add(q[0],q[1],10*k);
     }
     else if(it.type==='icon'||it.type==='cmark') r=(it.size||72)*k/2;
+    else if(it.type==='text' && hasBubble(it)){
+      const G=bubbleGeom(MEASURE_CTX,cam,it);
+      xs.push(G.x-G.w/2,G.x+G.w/2); ys.push(G.y-G.h/2,G.y+G.h/2);
+      for(const q of G.tails){ xs.push(q[0]); ys.push(q[1]); }
+    }
     else if(it.type==='text'){
       const s=(it.size||48)*k, lines=String(it.text||'').split('\n');
       const w=Math.max(...lines.map(l=>l.length))*s/2+s*0.3;
@@ -2359,7 +2410,7 @@ function startOperator(){
     mark:{style:'chart', font:'gothic'},
     arrow:{color:'#2f6fe0', width:12, head:'normal', dash:false},
     pen:{color:'#e03a3a', width:6},
-    text:{color:'#1d2733', size:48, bold:true, font:'gothic'},
+    text:{color:'#1d2733', size:48, bold:true, font:'gothic', bubble:'none'},
     area:{color:'#2f6fe0', alpha:0.3, edge:'line', font:'gothic'},
     haze:{mode:'brush', widthKm:300, soft:40},
     cloud:{mode:'brush', widthKm:260, toneV:0, relief:true, shadow:false, precip:'none', rainLevel:2, snowLevel:2, thunder:false, thSize:60, thFreq:'2'},
@@ -2389,6 +2440,7 @@ function startOperator(){
     {id:'cmark', mk:'<span style="color:#e03a3a">●</span>', label:'丸文字'},
     {id:'isoline', mk:'<span style="color:#4a5560">〜</span>', label:'等圧線(手)'},
     {id:'station', mk:'⦶', label:'観測点'},
+    {id:'bubble', mk:'💬', label:'吹き出し'},
     {id:'haze', mk:'<span style="color:#7a8a9a">◐</span>', label:'モヤ消し'},
     {id:'rainbow', mk:'<span style="background:linear-gradient(#e5322d,#ffd21a,#3cb44b,#2f7de1);-webkit-background-clip:text;background-clip:text;color:transparent">⌒</span>', label:'虹'}
   ];
@@ -2464,7 +2516,14 @@ function startOperator(){
   const DEFS={
     arrow:[{k:'head',t:'select',label:'先っぽ',opts:[['normal','矢印'],['fat','太い矢印（風の矢印）'],['both','両はし矢印 ⇔'],['none','線だけ（先っぽなし）']]},{k:'dash',t:'check',label:'点線にする（線だけのとき）'},{k:'color',t:'color'},{k:'width',t:'range',label:'太さ',min:2,max:30,step:1,dflt:12,reset:true}],
     pen:[{k:'color',t:'color'},{k:'width',t:'range',label:'太さ',min:2,max:24,step:1}],
-    text:[FONT_SEL,{k:'color',t:'color'},{k:'size',t:'range',label:'大きさ',min:16,max:160,step:2},{k:'bold',t:'check',label:'太字',def:true}],
+    text:[{k:'bubble',t:'seg',label:'吹き出し',opts:[['none','なし'],['round','角丸'],['ellipse','楕円']],dflt:'none'},FONT_SEL,{k:'color',t:'color',label:'文字の色'},{k:'size',t:'range',label:'大きさ',min:16,max:160,step:2},{k:'bold',t:'check',label:'太字',def:true}],
+    bubble:[{k:'bubFill',t:'color',label:'吹き出しの色'},
+      {k:'bubShadow',t:'check',label:'影をつける',def:true},
+      {k:'bubEdge',t:'check',label:'ふちの線をつける'},
+      {k:'bubLine',t:'color',label:'ふちの線の色',when:o=>!!o.bubEdge},
+      {k:'bubLineW',t:'range',label:'ふちの線の太さ',min:1,max:10,step:0.5,dflt:3,reset:true,when:o=>!!o.bubEdge},
+      {k:'bubRound',t:'range',label:'かどの丸み',min:0,max:100,step:5,dflt:60,unit:'%',reset:true,when:o=>o.bubble==='round'},
+      {k:'bubPad',t:'range',label:'文字のまわりのすき間',min:0.1,max:2,step:0.05,dflt:0.6,fmt:v=>Math.round(v*100),unit:'%',reset:true}],
     area:[{k:'color',t:'color'},{k:'alpha',t:'range',label:'濃さ',min:0.08,max:0.8,step:0.02,fmt:pct,unit:'%'},{k:'edge',t:'select',label:'ふち',opts:[['line','線あり'],['none','線なし'],['soft','ふわっとぼかす']]}],
     cloud:[{k:'mode',t:'seg',opts:[['brush','筆でなぞる'],['lasso','囲んで塗る'],['erase','雲消しゴム']]},{k:'widthKm',t:'range',label:'筆の太さ・雲の粒',min:80,max:700,step:10,unit:'km'}].concat(CLOUD_EXTRA),
     mark:[STYLE_SEL,FONT_SEL],
@@ -2590,7 +2649,11 @@ function startOperator(){
   TOOLS.forEach(t=>{
     const b=document.createElement('button'); b.className='tool'; b.dataset.tool=t.id;
     b.innerHTML=`<span class="mk">${t.mk}</span>${t.label}`;
-    b.onclick=()=>setTool(t.id);
+    b.onclick=()=>{
+      if(t.id==='bubble'){ if(!hasBubble({type:'text',bubble:opts.text.bubble})) opts.text.bubble='round'; setTool('text'); toolsEl.querySelectorAll('.tool').forEach(x=>x.classList.toggle('on',x.dataset.tool==='bubble')); return; }
+      if(t.id==='text') opts.text.bubble='none';
+      setTool(t.id);
+    };
     toolsEl.appendChild(b);
   });
   const palEl=$('pal');
@@ -2631,7 +2694,7 @@ function startOperator(){
     arrow:'クリックで点を打つ → 最後の点をもう一度クリックで確定。2点ならまっすぐ。「先っぽ」で矢印か線だけかを選べます。',
     pen:'ドラッグで書けます。書き終わると「選択・移動」に戻ります（Shiftを押しながらだと続けて書けます）。',
     eraser:'手書きの線をなぞると、1本まるごと消えます。',
-    text:'地図をクリックして文字を打ち、Enterで確定（Shift+Enterで改行）。',
+    text:'地図をクリックして文字を打ち、Enterで確定（Shift+Enterで改行）。吹き出しのときは、オレンジの点（しっぽの先）をドラッグして指したい所へ。「しっぽを足す」で何本でも、点を右クリックで消せます。',
     ellipse:'ドラッグで楕円を描く。選ぶと出る点で、長さや傾きを変えられます。',
     blob:'クリックで点をぐるっと打つ → 最初か最後の点をもう一度クリックで確定。',
     cloud:'筆：なぞった所が雲に／囲む：ぐるっと囲んだ中が雲に／雲消しゴム：なぞった所の雲を消す。描き終わると「選択・移動」に戻ります（Shiftで続けて）。',
@@ -2773,7 +2836,7 @@ function startOperator(){
         {k:'kinkS',t:'range',label:'折れ具合',min:1,max:10,step:1,dflt:5,when:o=>!!o.kink}].concat(LINE_LABEL);
       case 'arrow': return DEFS.arrow.concat(LINE_LABEL);
       case 'ink': return DEFS.pen;
-      case 'text': return [{k:'text',t:'textarea',label:'文字'}].concat(DEFS.text);
+      case 'text': return [{k:'text',t:'textarea',label:'文字'}].concat(DEFS.text, hasBubble(it)?DEFS.bubble:[]);
       case 'area': return [{k:'label',t:'textarea',label:'中に書く文字（空でもOK）'}].concat(WRAP_DEFS,[{k:'font',t:'select',label:'中の文字のフォント',opts:FONT_OPTS,dflt:'gothic'}],DEFS.area);
       case 'cloud': return [{k:'widthKm',t:'range',label:'筆の太さ・雲の粒',min:80,max:700,step:10,unit:'km'}].concat(CLOUD_EXTRA).concat(CLOUD_LABEL);
       case 'cmark': return DEFS.cmark;
@@ -2817,6 +2880,7 @@ function startOperator(){
     let h=(setMode==='side'?`<p style="margin:0 0 8px;font-weight:600">${nameOf(it)||''}</p>`:'')+fieldsHTML(defs,it);
     if(it.type==='high'||it.type==='low') h+=`<div class="row"><button class="btn sm" data-act="swap">${it.type==='high'?'低気圧':'高気圧'}に切り替え</button></div>`;
     if(it.type==='front'||it.type==='arrow') h+=`<div class="row"><button class="btn sm" data-act="flip">向きを反転</button></div>`;
+    if(hasBubble(it)) h+=`<div class="row"><span style="font-size:12px;color:var(--sub)">しっぽ <b>${(it.tails||[]).length}</b>本</span><button class="btn sm" data-act="tailAdd">＋ しっぽを足す</button>${(it.tails||[]).length?`<button class="btn sm" data-act="tailClear">しっぽを全部消す</button>`:''}</div><p class="note">しっぽの先（オレンジの点）はドラッグで動かせます。右クリックでそのしっぽを消せます。</p>`;
     if(it.type==='typhoon'){
       const hasFc=it.fc&&it.fc.length, hasPast=it.past&&it.past.length;
       h=`<div class="row" style="margin-bottom:8px"><button class="btn sm primary" data-act="fcDraw">🌀 進路予想を描く</button><button class="btn sm" data-act="pastDraw">過去の経路を描く</button></div>`
@@ -2828,7 +2892,8 @@ function startOperator(){
     h+=`<div class="row"><button class="btn sm" data-act="copy">コピー</button><button class="btn sm danger" data-act="del">削除</button></div>`;
     propsEl.innerHTML=h; bindZ(propsEl);
     bindFields(propsEl,it,defs,(k)=>{ normalize(it); commit(); if(k==='kink' && it.kink){ if(it.kinkA==null) it.kinkA=0.2; if(it.kinkB==null) it.kinkB=0.8; if(!state.isobar.on) toast('等圧線を表示すると、折れ目が見えます'); }
-      if(k==='style'||k==='precip'||k==='fade'||k==='labelWrap'||k==='kink'||k==='thunder'||k==='toneP'){ if(k==='labelWrap' && it.labelPos==null) it.labelPos=(it.type==='cloud'&&it.mode!=='lasso')?0.5:0; renderProps(); } },true);
+      if(k==='bubble' && hasBubble(it) && !it.tails){ const c=cam(), G=bubbleGeom(ctx,c,it); it.tails=[c.toLL(G.x-G.w*0.15, G.y+G.h/2+90*c.k)]; commit(); }
+      if(k==='style'||k==='precip'||k==='fade'||k==='labelWrap'||k==='kink'||k==='thunder'||k==='toneP'||k==='bubble'||k==='bubEdge'){ if(k==='labelWrap' && it.labelPos==null) it.labelPos=(it.type==='cloud'&&it.mode!=='lasso')?0.5:0; renderProps(); } },true);
     propsEl.querySelectorAll('[data-act]').forEach(el=>el.onclick=()=>{
       const a=el.dataset.act;
       if(a==='del') removeSel();
@@ -2840,6 +2905,12 @@ function startOperator(){
       else if(a==='fcClear'){ pushHistory(); delete it.fc; delete it.fcOrigin; it.passed=0; commit(); renderProps(); }
       else if(a==='pastClear'){ pushHistory(); delete it.past; if(!(it.fc&&it.fc.length)) delete it.fcOrigin; commit(); renderProps(); }
       else if(a==='fcRun'){ runTrack(it); }
+      else if(a==='tailAdd'){
+        pushHistory(); const c=cam(), G=bubbleGeom(ctx,c,it), n=(it.tails||[]).length;
+        const ang=PI/2+[0.0,-0.9,0.9,-1.8,1.8,PI][n%6], L=Math.max(G.w,G.h)/2+90*c.k;
+        (it.tails=it.tails||[]).push(c.toLL(G.x+Math.cos(ang)*L, G.y+Math.sin(ang)*L)); commit(); renderProps();
+      }
+      else if(a==='tailClear'){ pushHistory(); it.tails=[]; commit(); renderProps(); }
     });
   }
   function renderIsoProps(el){
@@ -2973,6 +3044,11 @@ function startOperator(){
       }
       const [x,y]=c.toS(it.lon,it.lat);
       if(it.type==='icon'){ const hs=Math.max(it.size*k/2,tol); if(Math.abs(sx-x)<hs && Math.abs(sy-y)<hs) return it; }
+      else if(it.type==='text' && hasBubble(it)){
+        const G=bubbleGeom(ctx,c,it);
+        if(Math.abs(sx-x)<G.w/2+tol*0.5 && Math.abs(sy-y)<G.h/2+tol*0.5) return it;
+        if(G.tails.some(q=>distPoly(P,[[x,y],q])<tol)) return it;
+      }
       else if(it.type==='text'){
         ctx.font=textFont(it,k);
         const lines=String(it.text||'').split('\n'), s=(it.size||48)*k;
@@ -3009,6 +3085,7 @@ function startOperator(){
     if(it.type==='icon') r=it.size*k/2+4*d;
     else if(it.type==='warp') r=14*d;
     else if(it.type==='cmark') r=(it.size||72)*k/2+6*d;
+    else if(it.type==='text' && hasBubble(it)){ const G=bubbleGeom(ctx,c,it); return [x-G.w/2-4*d,y-G.h/2-4*d,x+G.w/2+4*d,y+G.h/2+4*d]; }
     else if(it.type==='text'){
       ctx.font=textFont(it,k);
       const lines=String(it.text||'').split('\n'), s=(it.size||48)*k;
@@ -3036,6 +3113,7 @@ function startOperator(){
     const H=[];
     if(!it) return H;
     if(it.type==='hazecut') return H;
+    if(hasBubble(it)){ (it.tails||[]).forEach((q,i)=>{ const p2=c.toS(q[0],q[1]); H.push({k:'tl',i,x:p2[0],y:p2[1]}); }); return H; }
     if(it.type==='rainbow'){
       const G=rainbowGeom(c,it);
       it.pts.forEach((q,i)=>{ const p2=c.toS(q[0],q[1]); H.push({k:'v',i,x:p2[0],y:p2[1]}); });
@@ -3131,6 +3209,11 @@ function startOperator(){
     }else if(txt){
       pushHistory();
       const it={id:uid(), type:'text', lon:s.lonlat[0], lat:s.lonlat[1], text:txt, color:opts.text.color, size:opts.text.size, bold:opts.text.bold, font:opts.text.font};
+      if(hasBubble(opts.text)||opts.text.bubble==='round'||opts.text.bubble==='ellipse'){
+        it.bubble=opts.text.bubble;
+        for(const kk of ['bubFill','bubShadow','bubEdge','bubLine','bubLineW','bubRound','bubPad']) if(opts.text[kk]!=null) it[kk]=opts.text[kk];
+        const c=cam(), G=bubbleGeom(ctx,c,it); it.tails=[c.toLL(G.x-G.w*0.15, G.y+G.h/2+90*c.k)];
+      }
       state.items.push(it); commit(); made(it);
     }
     if(tool==='text') setTool('select');
@@ -3154,6 +3237,7 @@ function startOperator(){
     }
     if(h && h.k==='v' && it && it.pts.length>minPts(it)){ pushHistory(); it.pts.splice(h.i,1); commit(); }
     else if(h && h.k==='v' && it) toast('これ以上は点を消せません');
+    else if(h && h.k==='tl' && it && it.tails){ pushHistory(); it.tails.splice(h.i,1); commit(); renderProps(); }
     else if(h && h.k==='pv' && it && it.past){   // 台風の過去の経路の点
       pushHistory(); it.past.splice(h.i,1);
       if(!it.past.length){ delete it.past; renderProps(); }
@@ -3265,6 +3349,7 @@ function startOperator(){
         }
         if(h.k==='m'){ pushHistory(); it.pts.splice(h.i+1,0,[lon,lat]); commit(); drag={mode:'vertex', id:it.id, vi:h.i+1}; return; }
         if(h.k==='ex'||h.k==='ey'||h.k==='ix'||h.k==='iy'||h.k==='lp'||h.k==='ka'||h.k==='kb'||h.k==='rh'){ pushHistory(); drag={mode:h.k, id:it.id}; return; }
+        if(h.k==='tl'){ pushHistory(); drag={mode:'tl', id:it.id, i:h.i}; return; }
         if(h.k==='fv'||h.k==='fr'||h.k==='pv'){
           if(h.k==='pv' && e.altKey){ pushHistory(); it.past.splice(h.i,1); commit(); return; }
           pushHistory(); drag={mode:h.k, id:it.id, i:h.i}; return;
@@ -3355,6 +3440,9 @@ function startOperator(){
       const path=catmull(it.pts.map(p=>c.toS(p[0],p[1]))), L=measure(path), tot=L[L.length-1]||1;
       let best=0, bd=Infinity; path.forEach((q,i)=>{ const d2=Math.hypot(q[0]-sx,q[1]-sy); if(d2<bd){ bd=d2; best=i; } });
       it[drag.mode==='ka'?'kinkA':'kinkB']=clamp(L[best]/tot,0,1); commit();
+    }else if(drag.mode==='tl'){
+      const it=getItem(drag.id); if(!it||!it.tails||!it.tails[drag.i]) return;
+      it.tails[drag.i]=c.toLL(sx,sy); commit();
     }else if(drag.mode==='lp'){
       const it=getItem(drag.id); if(!it) return;
       const path=it.type==='isoline'?isolinePath(c,it):(it.type==='cloud'||it.type==='area')?(wrapPath(c,it)||{path:[[0,0],[1,0]]}).path:catmull(it.pts.map(p=>c.toS(p[0],p[1]))), L=measure(path), tot=L[L.length-1]||1;
@@ -3774,7 +3862,7 @@ function startOperator(){
           ctx.beginPath();
           if(h.k==='ka'||h.k==='kb'){ ctx.save(); ctx.translate(h.x,h.y); ctx.rotate(PI/4); ctx.rect(-6*d,-6*d,12*d,12*d); ctx.fillStyle='#7c3aed'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2*d; ctx.stroke(); ctx.restore(); continue; }
           if(h.k==='m'){ ctx.globalAlpha=.65; ctx.arc(h.x,h.y,4.5*d,0,2*PI); ctx.fillStyle='#fff'; ctx.fill(); ctx.stroke(); ctx.globalAlpha=1; }
-          else if(h.k==='lp'){ ctx.arc(h.x,h.y,6*d,0,2*PI); ctx.fillStyle='#f59e0b'; ctx.fill(); ctx.stroke(); }
+          else if(h.k==='lp'||h.k==='tl'){ ctx.arc(h.x,h.y,h.k==='tl'?7*d:6*d,0,2*PI); ctx.fillStyle='#f59e0b'; ctx.fill(); ctx.stroke(); }
           else{ ctx.arc(h.x,h.y,6.5*d,0,2*PI); ctx.fillStyle=h.k==='v'?'#fff':'#2563eb'; ctx.fill(); ctx.stroke(); }
         }
       }else if(one.type!=='isobars'){
