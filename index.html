@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.30</title>
+<title>天気図スタジオ v0.32</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,7 +24,30 @@ button,select,input,textarea{font:inherit;color:inherit}
 #side h1{font-size:17px;margin:2px 0 10px;display:flex;align-items:center;gap:6px}
 #side h1 small{color:var(--sub);font-weight:normal;font-size:12px}
 .sec{border-top:1px solid var(--line);padding:10px 0 4px}
-.sec h2{font-size:12px;color:var(--sub);margin:0 0 8px;font-weight:600;letter-spacing:.05em}
+.sec h2{font-size:12px;color:var(--sub);margin:0 0 8px;font-weight:600;letter-spacing:.05em;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.sec h2 .ic{font-size:15px;width:20px;text-align:center}
+.sec h2 .chev{margin-left:auto;font-size:11px;color:var(--sub);transition:transform .15s}
+.sec.closed h2{margin-bottom:4px}
+.sec.closed h2 .chev{transform:rotate(-90deg)}
+.sec.closed .secb{display:none}
+.sec h2:hover{color:var(--ink,#1d2733)}
+.sec h2 .hx{display:flex;gap:4px}
+.sec h2 .hx .btn{padding:2px 7px;font-size:11px}
+#layerList{display:flex;flex-direction:column;gap:2px;font-size:13px}
+.lyr{display:flex;align-items:center;gap:5px;padding:4px 5px;border:1px solid transparent;border-radius:6px;background:#fff;cursor:pointer}
+.lyr:hover{border-color:#cfd6de}
+.lyr.on{background:#e7f0fc;border-color:#2f7de1}
+.lyr.hid .nm{opacity:.45;text-decoration:line-through}
+.lyr .gr{cursor:grab;color:#9aa6b2;font-size:12px;padding:0 2px}
+.lyr .ico{width:20px;text-align:center;flex:none}
+.lyr .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lyr .nm small{color:var(--sub)}
+.lyr .tg{border:0;background:none;cursor:pointer;font-size:13px;padding:1px 3px;border-radius:4px;opacity:.35}
+.lyr .tg.act{opacity:1}
+.lyr .tg:hover{background:#eef2f6}
+.lyr.fixed{background:#f1f3f5;color:#8a96a3;cursor:default}
+.lyr.dragover{border-top:2px solid #2f7de1}
+.lyr.dragunder{border-bottom:2px solid #2f7de1}
 .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
 .btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;line-height:1.2}
 .btn:hover{background:#f5f7fa}
@@ -117,28 +140,32 @@ body.display.idle{cursor:none}
   padding:8px 16px;border-radius:8px;font-size:14px;transition:opacity .5s;pointer-events:none}
   .mcols label{display:flex;align-items:center;gap:3px;font-size:12px;color:var(--sub)}
   .mcols input[type=color]{width:30px;height:24px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer}
+  .pthumb{width:64px;height:44px;padding:0;border:2px solid #cfd6de;border-radius:6px;background:#fff;cursor:pointer;overflow:hidden}
+  .pthumb img{width:100%;height:100%;object-fit:contain;display:block}
+  .pthumb.on{border-color:#2f7de1;box-shadow:0 0 0 2px rgba(47,125,225,.3)}
 </style>
 </head>
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.30 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.32 操作画面</small></h1>
+    <div style="display:flex;justify-content:flex-end;margin:-6px 0 4px"><button class="btn sm" id="secCloseAll" style="font-size:11px;padding:2px 8px;white-space:nowrap" title="左の見出しを全部たたむ">▴ 全部たたむ</button></div>
 
-    <div class="sec">
-      <h2>表示画面（モニタ用）</h2>
-      <div class="row"><button class="btn primary wide" id="openDisp">表示画面を開く</button></div>
-      <div class="row"><button class="btn wide" id="openDispTab" title="ふつうのタブで開くので、Chrome のメニューからテレビにキャストできます">📺 タブで開く（キャスト用）</button></div>
+    <div class="sec" data-sec="disp">
+      <h2><span class="ic">📺</span>表示画面（モニタ用）</h2>
+      <div class="row" style="flex-wrap:nowrap"><button class="btn primary" style="flex:1" id="openDisp">表示画面を開く</button>
+      <button class="btn" style="flex:1" id="openDispTab" title="ふつうのタブで開くので、Chrome のメニューからテレビにキャストできます">📺 タブで開く（キャスト用）</button></div>
       <div class="row"><span class="status" id="dispStatus">表示画面：未接続</span></div>
     </div>
 
-    <div class="sec">
-      <h2>道具</h2>
+    <div class="sec" data-sec="tools">
+      <h2><span class="ic">✏️</span>道具</h2>
       <div class="tools" id="tools"></div>
       <div class="box" id="topts"></div>
     </div>
 
-    <div class="sec">
-      <h2>天気アイコン（選んで地図をクリック）</h2>
+    <div class="sec" data-sec="icons">
+      <h2><span class="ic">☀️</span>天気アイコン（選んで地図をクリック）</h2>
       <div class="tabs">
         <button class="btn sm on" data-tab="art">イラスト</button>
         <button class="btn sm" data-tab="emoji">絵文字</button>
@@ -148,25 +175,35 @@ body.display.idle{cursor:none}
       <p class="note" style="margin-top:6px">Shift を押しながらクリックで続けて置けます</p>
     </div>
 
-    <div class="sec">
-      <h2>選択中の設定</h2>
+    <div class="sec" data-sec="props">
+      <h2><span class="ic">⚙️</span>選択中の設定</h2>
       <div class="row"><span style="font-size:12px;color:var(--sub)">設定の場所：</span>
         <div class="seg sm" id="setMode"><button data-m="pop">選んだものの横（吹き出し）</button><button data-m="side">ここ（左）</button></div>
       </div>
       <div id="props"></div>
     </div>
 
-    <div class="sec">
-      <h2>地図</h2>
-      <div class="box" id="paperBox" style="margin:0 0 10px">
-        <div style="font-weight:700;font-size:13px;margin-bottom:4px">🖍 お絵かきモード（画像の上に描く）</div>
+    <div class="sec" data-sec="layers">
+      <h2><span class="ic">🗂️</span>レイヤー（上ほど手前）</h2>
+      <p class="note" style="margin:0 0 6px">クリックで選ぶ（Shift・Ctrlで追加）、≡ をドラッグで順番を入れかえ。👁 で見せる／かくす、🔒 でロック（地図の上でクリックしても選ばれない）。</p>
+      <div id="layerList"></div>
+    </div>
+
+    <div class="sec" data-sec="paper">
+      <h2><span class="ic">🖍️</span>お絵かきモード（画像の上に描く）</h2>
+      <div id="paperBox">
         <div style="font-size:12px;color:var(--sub);margin-bottom:6px">気象庁の天気図や衛星画像などの PNG・JPG を背景にして、その上に前線や台風を描けます。</div>
         <div class="row"><button class="btn sm" id="paperPick">🖼 画像を選ぶ</button><button class="btn sm danger" id="paperDel">画像をはずす</button></div>
         <input type="file" id="paperIn" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
         <label class="c"><input type="checkbox" id="paperOn"> 画像を背景にする（地図は消える）</label>
         <label class="f">出典（右下に出る文字）<input type="text" id="paperCredit" placeholder="出典：気象庁ホームページ"></label>
         <div id="paperNote" style="font-size:12px;color:var(--sub)"></div>
+        <div id="paperLib"></div>
       </div>
+    </div>
+
+    <div class="sec" data-sec="map">
+      <h2><span class="ic">🗺️</span>地図<span class="hx"><button class="btn sm" id="zin" title="拡大">＋</button><button class="btn sm" id="zout" title="縮小">−</button><button class="btn sm" id="home" title="日本中心">日本</button></span></h2>
       <label class="f">図法<select id="proj"><option value="merc">メルカトル図法</option><option value="lcc">ランベルト正角円錐図法（天気図ふう）</option></select></label>
       <label class="f">背景地図<select id="basemap"></select></label>
       <label class="c"><input type="checkbox" id="grid"> 緯線・経線</label>
@@ -193,15 +230,10 @@ body.display.idle{cursor:none}
           <div class="seg sm" id="mPrefDash"><button data-v="0">実線</button><button data-v="1">点線</button></div>
         </div>
       </div>
-      <div class="row">
-        <button class="btn" id="zin">＋ 拡大</button>
-        <button class="btn" id="zout">− 縮小</button>
-        <button class="btn" id="home">日本中心</button>
-      </div>
     </div>
 
-    <div class="sec">
-      <h2>等圧線</h2>
+    <div class="sec" data-sec="iso">
+      <h2><span class="ic">〰️</span>等圧線</h2>
       <label class="c"><input type="checkbox" id="isoOn"> 等圧線を表示（高・低・台風の気圧から自動）</label>
       <div class="row">
         <span style="font-size:12px;color:var(--sub)">間隔</span>
@@ -217,8 +249,8 @@ body.display.idle{cursor:none}
       </div>
     </div>
 
-    <div class="sec">
-      <h2>まとめて切り替え</h2>
+    <div class="sec" data-sec="bulk">
+      <h2><span class="ic">🔁</span>まとめて切り替え</h2>
       <div class="row"><span style="font-size:12px;color:var(--sub);width:100%">気圧の数字</span>
         <button class="btn sm" id="hpaAllOn">全部 表示</button>
         <button class="btn sm" id="hpaAllOff">全部 隠す</button>
@@ -236,8 +268,8 @@ body.display.idle{cursor:none}
       </div>
     </div>
 
-    <div class="sec">
-      <h2>操作のコツ</h2>
+    <div class="sec" data-sec="tips">
+      <h2><span class="ic">💡</span>操作のコツ</h2>
       <ul class="hint">
         <li>空いている所をドラッグ：地図を動かす／ホイール：拡大縮小</li>
         <li>前線・矢印・自由形：クリックで点を打ち、最後の点をもう一度クリック（ダブルクリック・Enter）で確定</li>
@@ -2010,6 +2042,8 @@ const TW_KEYS=['kinkA','kinkB','kinkS','op','fadeW','labelGap','labelPos','label
 const GROWS=['front','arrow','ink','rainbow'];
 function tweenState(A,B,t){
   const out=Object.assign({},B);
+  delete out._paperFrom; delete out._paperT;
+  if(paperKey(A.paper)!==paperKey(B.paper)){ out._paperFrom=A.paper||null; out._paperT=t; }
   if(B.haze){ const a0=A.haze&&A.haze.color===B.haze.color?A.haze.amount||0:0; out.haze=Object.assign({},B.haze,{amount:a0+((B.haze.amount||0)-a0)*t}); }
   out.view={lon:A.view.lon+(B.view.lon-A.view.lon)*t, lat:A.view.lat+(B.view.lat-A.view.lat)*t, z:A.view.z+(B.view.z-A.view.z)*t};
   const amap=new Map(A.items.filter(i=>!i._dead).map(i=>[i.id,i]));
@@ -2097,31 +2131,39 @@ function drawLayered(ctx,cam,it,drawFn){
   }
   ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=a; ctx.drawImage(L,0,0); ctx.restore();
 }
-/* ---- お絵かきモード：読み込んだ画像を背景にする（画像はページ全体で1枚） ---- */
-const PAPER={on:false,id:null,credit:''};          // いまの設定（操作画面・表示画面それぞれで持つ）
+/* ---- お絵かきモード：読み込んだ画像を背景にする（シーンごとに st.paper で決める） ---- */
+const PAPER={on:false,id:null,credit:''};          // st.paper が無いとき（古いデータ）用
+let PAPER_ONLOAD=null;                               // 画像が読めたときに呼ぶ（操作画面でサムネを描きなおす）
 const PAPER_IMG=new Map();                          // id → {img, ok}
 function setPaperSrc(id,src){
   if(!id||!src||PAPER_IMG.has(id)) return;
   const img=new Image(), e={img,ok:false}; PAPER_IMG.set(id,e);
-  img.onload=()=>{ e.ok=true; }; img.src=src;
+  img.onload=()=>{ e.ok=true; if(PAPER_ONLOAD) PAPER_ONLOAD(id); }; img.src=src;
 }
-function paperImg(){ const e=PAPER.id&&PAPER_IMG.get(PAPER.id); return e&&e.ok?e.img:null; }
+function paperImg(P=PAPER){ const e=P&&P.id&&PAPER_IMG.get(P.id); return e&&e.ok?e.img:null; }
+const paperOnOf=P=>!!(P&&P.on&&P.id);
+const paperKey=P=>paperOnOf(P)?P.id:'';
 /* 画像が画面のどこに入るか（全体が見えるように、まん中に置く） */
-function paperRect(W,H){
-  const img=paperImg(); if(!img) return null;
+function paperRect(W,H,P=PAPER){
+  const img=paperImg(P); if(!img) return null;
   const sc=Math.min(W/img.naturalWidth,H/img.naturalHeight), w=img.naturalWidth*sc, h=img.naturalHeight*sc;
   return {x:(W-w)/2, y:(H-h)/2, w, h, sc, nw:img.naturalWidth, nh:img.naturalHeight};
 }
-function drawPaper(ctx,W,H){
+function drawPaper(ctx,W,H,P=PAPER){
   ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
-  const r=paperRect(W,H); if(!r) return;
+  const r=paperRect(W,H,P); if(!r) return;
   ctx.imageSmoothingQuality='high';
-  ctx.drawImage(paperImg(),r.x,r.y,r.w,r.h);
+  ctx.drawImage(paperImg(P),r.x,r.y,r.w,r.h);
+}
+const FADE_CV=document.createElement('canvas');
+function drawBackdrop(ctx,cam,st,P,W,H){
+  if(paperOnOf(P)) drawPaper(ctx,W,H,P);
+  else{ const B=BASEMAPS[baseOf(st)]; drawBase(ctx,cam,st,B); if(st.grid) drawGrid(ctx,cam,!!B.simple,mapOptsOf(st)); }
 }
 /* ---- モヤ：背景の上に白か黒の膜をかけ、モヤ消し（hazecut）の所だけ晴らす ---- */
 const HAZE_CV=document.createElement('canvas');
 function hazeColor(H){ return H.color==='black' ? '0,0,0' : '255,255,255'; }
-function drawHaze(ctx,cam,st,W,H){
+function drawHaze(ctx,cam,st,W,H,showHidden=false){
   const Hz=st.haze; if(!Hz || !(Hz.amount>0)) return;
   if(HAZE_CV.width!==W||HAZE_CV.height!==H){ HAZE_CV.width=W; HAZE_CV.height=H; }
   const g=HAZE_CV.getContext('2d'), k=cam.k;
@@ -2132,9 +2174,9 @@ function drawHaze(ctx,cam,st,W,H){
   g.globalCompositeOperation='destination-out';
   const OFF=W+H+5000;   // 形は画面の外に描き、ぼかした影だけを画面に落とす
   for(const it of st.items){
-    if(it.type!=='hazecut' || !it.pts || !it.pts.length) continue;
+    if(it.type!=='hazecut' || !it.pts || !it.pts.length || (it.hidden && !showHidden)) continue;
     const sp=it.pts.map(q=>cam.toS(q[0],q[1]));
-    g.globalAlpha=(it._a==null?1:clamp(it._a,0,1))*clamp((it.op??100)/100,0,1);
+    g.globalAlpha=(it._a==null?1:clamp(it._a,0,1))*clamp((it.op??100)/100,0,1)*(it.hidden?0.3:1);
     const blur=clamp(it.soft??40,0,100)*0.6*k;
     g.shadowColor='rgba(0,0,0,1)'; g.shadowBlur=blur; g.shadowOffsetX=OFF; g.shadowOffsetY=0;
     g.beginPath(); sp.forEach((q,i)=>i?g.lineTo(q[0]-OFF,q[1]):g.moveTo(q[0]-OFF,q[1]));
@@ -2151,18 +2193,22 @@ function render(ctx,W,H,st,o={}){
   const cam = makeCam(st.view,W,H,projOf(st)), k=cam.k, time=o.time||0, anim=st.anim!==false;
   ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=1;
   ctx.fillStyle='#dfe7ee'; ctx.fillRect(0,0,W,H);
-  const bm = baseOf(st), B=BASEMAPS[bm], paperOn=PAPER.on&&!!PAPER.id;
-  if(paperOn) drawPaper(ctx,W,H);
-  else{
-    drawBase(ctx,cam,st,B);
-    if(st.grid) drawGrid(ctx,cam,!!B.simple,mapOptsOf(st));
+  const bm = baseOf(st), P=st.paper||PAPER, paperOn=paperOnOf(P);
+  drawBackdrop(ctx,cam,st,P,W,H);
+  // シーン切り替え（ヌルヌル）：前のシーンの背景をうすくしながら重ねる
+  if(st._paperFrom!==undefined && st._paperT<1){
+    if(FADE_CV.width!==W||FADE_CV.height!==H){ FADE_CV.width=W; FADE_CV.height=H; }
+    const g=FADE_CV.getContext('2d'); g.setTransform(1,0,0,1,0,0); g.globalAlpha=1; g.fillStyle='#dfe7ee'; g.fillRect(0,0,W,H);
+    drawBackdrop(g,cam,st,st._paperFrom,W,H);
+    ctx.save(); ctx.globalAlpha=clamp(1-st._paperT,0,1); ctx.drawImage(FADE_CV,0,0); ctx.restore();
   }
-  drawHaze(ctx,cam,st,W,H);
+  drawHaze(ctx,cam,st,W,H,o.showHidden);
 
-  const items = st.items;
+  // 👁 でかくしたもの：表示画面・PNG には出さない。操作画面ではうっすら出す
+  const items = st.items.some(i=>i.hidden) ? st.items.filter(i=>!i.hidden||o.showHidden).map(i=>i.hidden?Object.assign({},i,{op:opOf(i)*0.22}):i) : st.items;
   const isoOn=st.isobar && st.isobar.on;
   const isoAvoid=()=>items.filter(i=>['high','low','typhoon'].includes(i.type)).map(i=>cam.toS(i.lon,i.lat));
-  if(isoOn && !items.some(i=>i.type==='isobars')) drawIsobars(ctx,cam,st,isoAvoid());
+  if(isoOn && !st.items.some(i=>i.type==='isobars')) drawIsobars(ctx,cam,st,isoAvoid());
   const erasers=items.filter(i=>i.type==='cloud' && i.mode==='erase');
   for(let n=0;n<items.length;){
     const it=items[n];
@@ -2180,7 +2226,7 @@ function render(ctx,W,H,st,o={}){
     }
     n++;
     if(it.type==='warp' || it.type==='hazecut') continue;
-    if(it.type==='isobars'){ if(isoOn){ ctx.save(); ctx.globalAlpha=it._a==null?1:clamp(it._a,0,1); drawIsobars(ctx,cam,st,isoAvoid()); ctx.restore(); } continue; }
+    if(it.type==='isobars'){ if(isoOn){ ctx.save(); ctx.globalAlpha=(it._a==null?1:clamp(it._a,0,1))*opOf(it)/100; drawIsobars(ctx,cam,st,isoAvoid()); ctx.restore(); } continue; }
     const grow = it._grow==null ? 1 : clamp(it._grow,0,1);
     const body=ctx=>{
     if(it.type==='front'||it.type==='arrow'){
@@ -2211,7 +2257,7 @@ function render(ctx,W,H,st,o={}){
   }
   ctx.globalAlpha=1;
   ctx.font=`${15*k}px ${JP_FONT}`; ctx.textAlign='right'; ctx.textBaseline='bottom';
-  if(paperOn){ const pr=paperRect(W,H)||{x:0,y:0,w:W,h:H}; if(PAPER.credit) haloText(ctx, PAPER.credit, pr.x+pr.w-10*k, pr.y+pr.h-8*k, 'rgba(30,40,50,.85)', 'rgba(255,255,255,.85)', 4*k); }
+  if(paperOn){ const pr=paperRect(W,H,P)||{x:0,y:0,w:W,h:H}; if(P.credit) haloText(ctx, P.credit, pr.x+pr.w-10*k, pr.y+pr.h-8*k, 'rgba(30,40,50,.85)', 'rgba(255,255,255,.85)', 4*k); }
   else haloText(ctx, BASEMAPS[bm].attr+(mapOptsOf(st).pref?'／県境：地球地図日本（国土地理院）':''), W-10*k, H-8*k, 'rgba(30,40,50,.8)', 'rgba(255,255,255,.8)', 4*k);
   if(o.overlay) o.overlay(ctx,cam);
   return cam;
@@ -2263,7 +2309,8 @@ function startDisplay(){
   Link.on(m=>{
     if(m.t==='paper'){ if(m.id&&m.src) setPaperSrc(m.id,m.src); return; }
     if(m.t==='state' && m.s){
-      if(m.s.paper){ Object.assign(PAPER,m.s.paper); if(PAPER.on && PAPER.id && !PAPER_IMG.has(PAPER.id)) Link.send({t:'needPaper', id:PAPER.id}); }
+      if(m.s.paper){ Object.assign(PAPER,m.s.paper); }
+      for(const id of [m.s.paper&&m.s.paper.id, ...(m.need||[])]) if(id && !PAPER_IMG.has(id)) Link.send({t:'needPaper', id});
       const now=performance.now();
       const shown = tween ? clone(tweenNow(now)) : cur;
       target=m.s;
@@ -2292,7 +2339,7 @@ function startDisplay(){
   const GROW_TYPES=['front','arrow','ink','rainbow'];
   function smooth(dt){
     const f=1-Math.exp(-dt*9);
-    cur.basemap=target.basemap; cur.grid=target.grid; cur.anim=target.anim; cur.isobar=target.isobar; cur.mapOpts=target.mapOpts;
+    cur.basemap=target.basemap; cur.grid=target.grid; cur.anim=target.anim; cur.isobar=target.isobar; cur.mapOpts=target.mapOpts; cur.paper=target.paper; delete cur._paperFrom;
     { const th=target.haze||{amount:0,color:'white'}, ch=cur.haze||{amount:0,color:th.color};
       cur.haze=Object.assign({},th,{amount: ch.color===th.color ? ch.amount+(th.amount-ch.amount)*f : th.amount}); }
     for(const key of ['lon','lat','z']) cur.view[key]+=(target.view[key]-cur.view[key])*f;
@@ -2381,11 +2428,36 @@ function startOperator(){
     return s;
   }
   let state = migrate(loadSaved() || defaultState());
-  const PAPER_KEY='tenkizu-studio-paper';
-  let paperSrc=null;
-  state.paper=Object.assign({on:false,id:null,credit:'出典：気象庁ホームページ'},state.paper||{});
-  try{ const sv=JSON.parse(localStorage.getItem(PAPER_KEY)||'null'); if(sv && sv.id===state.paper.id && sv.src){ paperSrc=sv.src; setPaperSrc(sv.id,sv.src); } }catch(e){}
-  if(!paperSrc){ state.paper.on=false; state.paper.id=null; }
+  /* 背景画像の置き場：id → dataURL。ブラウザの IndexedDB に入れる（localStorage には大きすぎるので） */
+  const PAPER_KEY='tenkizu-studio-paper';   // v0.27〜0.30 の1枚保存（読み込んだら移す）
+  const PAPERS=new Map();
+  const PDEF=()=>({on:false,id:null,credit:'出典：気象庁ホームページ'});
+  state.paper=Object.assign(PDEF(),state.paper||{});
+  // 前の版のシーンには背景の設定がないので、いまの背景を引きつぐ（見た目を変えない）
+  (state.scenes||[]).forEach(sc=>{ if(sc.snap && !sc.snap.paper) sc.snap.paper=clone(state.paper); });
+  const IDB={
+    db:null,
+    open(){ return new Promise(res=>{ try{ const r=indexedDB.open('tenkizu-studio',1); r.onupgradeneeded=()=>r.result.createObjectStore('papers'); r.onsuccess=()=>{ IDB.db=r.result; res(true); }; r.onerror=()=>res(false); }catch(e){ res(false); } }); },
+    tx(mode){ return IDB.db.transaction('papers',mode).objectStore('papers'); },
+    put(id,src){ return new Promise(res=>{ if(!IDB.db) return res(false); try{ const q=IDB.tx('readwrite').put(src,id); q.onsuccess=()=>res(true); q.onerror=()=>res(false); }catch(e){ res(false); } }); },
+    del(id){ try{ if(IDB.db) IDB.tx('readwrite').delete(id); }catch(e){} },
+    all(){ return new Promise(res=>{ if(!IDB.db) return res([]); try{ const st=IDB.tx('readonly'), out=[]; const q=st.openCursor(); q.onsuccess=()=>{ const c=q.result; if(c){ out.push([c.key,c.value]); c.continue(); } else res(out); }; q.onerror=()=>res(out); }catch(e){ res([]); } }); }
+  };
+  const srcOf=id=>id?PAPERS.get(id)||null:null;
+  const usedPaperIds=()=>{ const u=new Set(); const add=P=>{ if(P&&P.id) u.add(P.id); }; add(state.paper); (state.scenes||[]).forEach(sc=>add(sc.snap&&sc.snap.paper)); return u; };
+  function addPaperSrc(id,src){ if(!id||!src) return; if(!PAPERS.has(id)){ PAPERS.set(id,src); IDB.put(id,src); } setPaperSrc(id,src); }
+  const papersReady=(async()=>{
+    await IDB.open();
+    const used=usedPaperIds();
+    for(const [id,src] of await IDB.all()){
+      if(used.has(id)){ PAPERS.set(id,src); setPaperSrc(id,src); }
+      else IDB.del(id);   // どのシーンでも使っていない画像は、開きなおしたときに片づける
+    }
+    try{ const sv=JSON.parse(localStorage.getItem(PAPER_KEY)||'null'); if(sv && sv.id && sv.src){ addPaperSrc(sv.id,sv.src); localStorage.removeItem(PAPER_KEY); } }catch(e){}
+    // 画像が見つからない背景は地図にもどす
+    const fix=P=>{ if(P && P.id && !PAPERS.has(P.id)){ P.on=false; P.id=null; } };
+    fix(state.paper); (state.scenes||[]).forEach(sc=>fix(sc.snap&&sc.snap.paper));
+  })();
   state.haze=Object.assign({amount:0,color:'white'},state.haze||{});
   const syncPaper=()=>Object.assign(PAPER,state.paper);
   syncPaper();
@@ -2401,6 +2473,27 @@ function startOperator(){
   let tool='select', iconPick={art:'sun'}, palTab='art';
   let sel=new Set(), drag=null, draft=null, cursor=null, dirty=true, hoverHit=null;
   let clip=null, pasteN=0, lastMade=null, opTween=null;
+  /* ---------- 左の見出し：たたむ／ひらく（ブラウザが覚える） ---------- */
+  const SEC_DEF={disp:true,tools:true,icons:true,props:false,layers:false,paper:true,map:false,iso:false,bulk:false,tips:false};
+  let secOpen={}; try{ secOpen=JSON.parse(localStorage.getItem('tenkizu-sec')||'{}')||{}; }catch(e){}
+  const secEl=k=>document.querySelector(`#side .sec[data-sec="${k}"]`);
+  function setSec(k,open,save=true){
+    const el=secEl(k); if(!el) return;
+    el.classList.toggle('closed',!open);
+    if(save){ secOpen[k]=open; try{ localStorage.setItem('tenkizu-sec',JSON.stringify(secOpen)); }catch(e){} }
+    if(k==='layers' && open) renderLayers();
+  }
+  const isSecOpen=k=>{ const el=secEl(k); return !!el && !el.classList.contains('closed'); };
+  document.querySelectorAll('#side .sec[data-sec]').forEach(el=>{
+    const h=el.querySelector('h2'), body=document.createElement('div'); body.className='secb';
+    while(h.nextSibling) body.appendChild(h.nextSibling);
+    el.appendChild(body);
+    const ch=document.createElement('span'); ch.className='chev'; ch.textContent='▼'; h.appendChild(ch);
+    const k=el.dataset.sec;
+    el.classList.toggle('closed', !(secOpen[k]!=null ? secOpen[k] : SEC_DEF[k]));
+    h.addEventListener('click',e=>{ if(e.target.closest('button')) return; setSec(k, el.classList.contains('closed')); });
+  });
+  document.getElementById('secCloseAll').onclick=()=>Object.keys(SEC_DEF).forEach(k=>setSec(k,false));
   let setMode='pop', popClosedKey=null, popManual=null;
   try{ setMode=localStorage.getItem('tenkizu-setmode')||'pop'; }catch(e){}
   const hist=[];
@@ -2786,7 +2879,7 @@ function startOperator(){
     if(sel.has('isobars')){ state.isobar.on=false; renderIso(); }
     state.items=state.items.filter(i=>!sel.has(i.id) || i.type==='isobars'); sel.clear(); commit(); renderProps();
   }
-  const selectable=i=>!(i.type==='hazecut' && !(state.haze.amount>0)) && !(i.type==='cloud' && i.mode==='erase') && !(i.type==='warp' && !(state.isobar && state.isobar.on)) && i.type!=='isobars';
+  const selectable=i=>!i.locked && !i.hidden && !(i.type==='hazecut' && !(state.haze.amount>0)) && !(i.type==='cloud' && i.mode==='erase') && !(i.type==='warp' && !(state.isobar && state.isobar.on)) && i.type!=='isobars';
 
   /* ---------- コピー・貼り付け ---------- */
   function copySel(){ const items=selItems().filter(i=>i.type!=='isobars'); if(!items.length) return; clip=clone(items); pasteN=0; toast(`${items.length}個コピーしました`); }
@@ -2870,6 +2963,8 @@ function startOperator(){
     return side?sideProps:popBody;
   }
   function renderProps(){
+    if(setMode==='side' && sel.size && !isSecOpen('props')) setSec('props',true,false);
+    renderLayers();
     let propsEl=propsTarget();
     if(sel.size>1){ renderMulti(propsEl); return; }
     const it=selOne();
@@ -2911,6 +3006,75 @@ function startOperator(){
         (it.tails=it.tails||[]).push(c.toLL(G.x+Math.cos(ang)*L, G.y+Math.sin(ang)*L)); commit(); renderProps();
       }
       else if(a==='tailClear'){ pushHistory(); it.tails=[]; commit(); renderProps(); }
+    });
+  }
+  /* ---------- レイヤーのリスト ---------- */
+  const FRONT_NAME={warm:'温暖前線',cold:'寒冷前線',stat:'停滞前線',occl:'閉塞前線'};
+  const LAYER_IC={high:'<b style="color:#1f5fbf">高</b>',low:'<b style="color:#d23">低</b>',typhoon:'🌀',arrow:'➜',ink:'✎',icon:'🖼',cloud:'☁️',area:'⬭',cmark:'㊥',isoline:'〰',isobars:'〰️',station:'⦶',rainbow:'🌈'};
+  const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function layerInfo(it){
+    let ic=LAYER_IC[it.type]||'•', nm=nameOf(it)||it.type, sub='';
+    if(it.type==='front'){ nm=FRONT_NAME[it.kind]||'前線'; ic=`<span style="color:${it.kind==='warm'?'#d23':it.kind==='cold'?'#1f5fbf':it.kind==='occl'?'#8a3fc0':'#d23'}">▲</span>`; if(it.label) sub=it.label; }
+    else if(it.type==='text'){ ic=hasBubble(it)?'💬':'🔤'; nm=hasBubble(it)?'吹き出し':'文字'; sub=String(it.text||'').replace(/\n/g,' '); }
+    else if(it.type==='typhoon') sub=`${it.no?it.no+'号 ':''}${it.hpa||''}hPa`;
+    else if(it.type==='high'||it.type==='low') sub=`${it.hpa||''}hPa`;
+    else if(it.type==='cloud'){ sub=[it.precip==='rain'?'雨':it.precip==='snow'?'雪':'', it.thunder?'雷':'', it.label||''].filter(Boolean).join('・'); }
+    else if(it.type==='isoline') sub=`${it.level||''}hPa`;
+    else if(it.type==='icon'){ if(it.emoji) ic=it.emoji; else if(it.sym) sub=it.sym; else if(it.art) sub=it.art; }
+    else if(it.type==='arrow'||it.type==='area'||it.type==='cmark') sub=it.label||it.text||'';
+    return {ic,nm,sub};
+  }
+  let layerDrag=null;
+  function renderLayers(){
+    const el=$('layerList'); if(!el || !isSecOpen('layers')) return;
+    const rows=state.items.map((it,i)=>({it,i})).filter(r=>r.it.type!=='warp'&&r.it.type!=='hazecut'&&!(r.it.type==='cloud'&&r.it.mode==='erase')).reverse();
+    let h=rows.map(({it})=>{
+      const L=layerInfo(it);
+      return `<div class="lyr${sel.has(it.id)?' on':''}${it.hidden?' hid':''}" data-lid="${it.id}" draggable="true">
+        <span class="gr" title="ドラッグで順番を入れかえ">≡</span><span class="ico">${L.ic}</span>
+        <span class="nm">${esc(L.nm)}${L.sub?` <small>${esc(L.sub)}</small>`:''}</span>
+        <button class="tg${it.hidden?'':' act'}" data-tg="hidden" title="${it.hidden?'かくしています（クリックで見せる）':'見せています（クリックでかくす）'}">${it.hidden?'🙈':'👁'}</button>
+        <button class="tg${it.locked?' act':''}" data-tg="locked" title="${it.locked?'ロック中（クリックで解除）':'ロックする'}">${it.locked?'🔒':'🔓'}</button></div>`;
+    }).join('');
+    if(!rows.length) h='<p class="empty" style="margin:2px 0">まだ何もありません。</p>';
+    const nCut=state.items.filter(i=>i.type==='hazecut').length;
+    if(state.haze && state.haze.amount>0) h+=`<div class="lyr fixed"><span class="gr"> </span><span class="ico">◐</span><span class="nm">モヤ <small>${state.haze.color==='black'?'黒':'白'} ${Math.round(state.haze.amount)}%・晴れ間 ${nCut}</small></span></div>`;
+    h+=`<div class="lyr fixed"><span class="gr"> </span><span class="ico">${paperOnOf(state.paper)?'🖍️':'🗺️'}</span><span class="nm">背景 <small>${paperOnOf(state.paper)?'画像（お絵かきモード）':'地図（'+(BASEMAPS[state.basemap]?BASEMAPS[state.basemap].name||state.basemap:state.basemap)+'）'}</small></span></div>`;
+    el.innerHTML=h;
+    el.querySelectorAll('.lyr[data-lid]').forEach(row=>{
+      const id=row.dataset.lid;
+      row.onclick=e=>{
+        const tg=e.target.closest('[data-tg]');
+        const it=getItem(id); if(!it) return;
+        if(tg){
+          e.stopPropagation(); pushHistory();
+          const k=tg.dataset.tg; it[k]=!it[k]; if(!it[k]) delete it[k];
+          if(k==='hidden' && it.hidden) sel.delete(id);
+          commit(); renderProps(); return;
+        }
+        if(tool!=='select') setTool('select');
+        if(e.shiftKey||e.ctrlKey||e.metaKey){ if(sel.has(id)) sel.delete(id); else sel.add(id); popClosedKey=null; renderProps(); }
+        else select(id);
+      };
+      row.ondragstart=e=>{ layerDrag=id; e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain',id); }catch(_){} };
+      row.ondragend=()=>{ layerDrag=null; el.querySelectorAll('.lyr').forEach(r=>r.classList.remove('dragover','dragunder')); };
+      row.ondragover=e=>{
+        if(!layerDrag || layerDrag===id) return; e.preventDefault();
+        const r=row.getBoundingClientRect(), below=e.clientY>r.top+r.height/2;
+        el.querySelectorAll('.lyr').forEach(x=>x.classList.remove('dragover','dragunder'));
+        row.classList.add(below?'dragunder':'dragover');
+      };
+      row.ondrop=e=>{
+        e.preventDefault(); if(!layerDrag || layerDrag===id) return;
+        const r=row.getBoundingClientRect(), below=e.clientY>r.top+r.height/2;
+        const from=state.items.findIndex(i=>i.id===layerDrag); if(from<0) return;
+        pushHistory();
+        const [mv]=state.items.splice(from,1);
+        let to=state.items.findIndex(i=>i.id===id);
+        // リストは上ほど手前（配列の後ろ）。行の上半分に落とす＝その行より手前
+        state.items.splice(below?to:to+1,0,mv);
+        layerDrag=null; commit(); renderProps();
+      };
     });
   }
   function renderIsoProps(el){
@@ -2992,7 +3156,7 @@ function startOperator(){
     const hazeHit=()=>{
       if(!(state.haze.amount>0)) return null;
       for(const it of items){
-        if(it.type!=='hazecut' || !it.pts.length) continue;
+        if(it.type!=='hazecut' || !it.pts.length || it.locked || it.hidden) continue;
         const sp=it.pts.map(p=>c.toS(p[0],p[1]));
         if(it.mode==='lasso'){ if(sp.length>2 && inPoly(P,sp)) return it; }
         else if(distPoly(P,sp)<Math.max(tol,(it.widthKm||300)*c.pxPerKm(it.pts[0][1])/2)) return it;
@@ -3000,7 +3164,7 @@ function startOperator(){
       return null;
     };
     for(const it of items){
-      if(it.type==='warp' || it.type==='hazecut') continue;
+      if(it.type==='warp' || it.type==='hazecut' || it.locked || it.hidden) continue;
       if(it.type==='isobars'){
         if(isoOn && isobarChains(c,state).some(ch=>distPoly(P,ch.pts)<tol)){ isoClick=[sx,sy]; return it; }
         continue;
@@ -3112,7 +3276,7 @@ function startOperator(){
   function handlesOf(it,c){
     const H=[];
     if(!it) return H;
-    if(it.type==='hazecut') return H;
+    if(it.type==='hazecut' || it.locked) return H;
     if(hasBubble(it)){ (it.tails||[]).forEach((q,i)=>{ const p2=c.toS(q[0],q[1]); H.push({k:'tl',i,x:p2[0],y:p2[1]}); }); return H; }
     if(it.type==='rainbow'){
       const G=rainbowGeom(c,it);
@@ -3673,7 +3837,7 @@ function startOperator(){
   }
   $('png').onclick=async()=>{
     // お絵かきモード：画像のところだけ切り取り、元の画像以上の細かさで書き出す
-    const pr0=state.paper.on && paperSrc ? paperRect(1920,1080) : null;
+    const pr0=paperOnOf(state.paper) ? paperRect(1920,1080,state.paper) : null;
     let S=1;
     if(pr0){ S=Math.max(1, pr0.nw/pr0.w, pr0.nh/pr0.h); S=Math.min(S, 8000/1920, 8000/1080, Math.sqrt(40e6/(1920*1080))); }
     const W=Math.round(1920*S), H=Math.round(1080*S), c=makeCam(state.view,W,H,projOf(state));
@@ -3688,7 +3852,7 @@ function startOperator(){
     render(octx,W,H,state,{time:performance.now()/1000});
     let outCv=off;
     if(pr0){
-      const r=paperRect(W,H), x=Math.round(r.x), y=Math.round(r.y), w=Math.round(r.w), h=Math.round(r.h);
+      const r=paperRect(W,H,state.paper), x=Math.round(r.x), y=Math.round(r.y), w=Math.round(r.w), h=Math.round(r.h);
       outCv=document.createElement('canvas'); outCv.width=w; outCv.height=h;
       outCv.getContext('2d').drawImage(off,x,y,w,h,0,0,w,h);
     }
@@ -3697,31 +3861,31 @@ function startOperator(){
     }catch(err){ toast('地図の読み込みの関係で画像化できませんでした'); console.error(err); }
   };
   $('saveJson').onclick=()=>{
-    const data=JSON.stringify({app:'tenkizu-studio', v:6, view:state.view, basemap:state.basemap, grid:state.grid, anim:state.anim, items:state.items, isobar:state.isobar, mapOpts:state.mapOpts, zfree:true, scenes:state.scenes, cur:state.cur, sceneMode:state.sceneMode, sceneDur:state.sceneDur, sceneHold:state.sceneHold, paper:state.paper, paperSrc:paperSrc||null, haze:state.haze},null,1);
+    const data=JSON.stringify({app:'tenkizu-studio', v:6, view:state.view, basemap:state.basemap, grid:state.grid, anim:state.anim, items:state.items, isobar:state.isobar, mapOpts:state.mapOpts, zfree:true, scenes:state.scenes, cur:state.cur, sceneMode:state.sceneMode, sceneDur:state.sceneDur, sceneHold:state.sceneHold, paper:state.paper, papers:Object.fromEntries([...usedPaperIds()].filter(srcOf).map(id=>[id,srcOf(id)])), haze:state.haze},null,1);
     download(new Blob([data],{type:'application/json'}),`tenkizu_${stamp()}.json`);
   };
   $('loadJson').onclick=()=>$('fileIn').click();
   /* ---------- お絵かきモード ---------- */
+  const sceneLabel=()=>state.cur>=0&&state.scenes[state.cur] ? `このシーン（${state.cur+1}コマ目）` : 'いま';
   function renderPaper(){
-    const P=state.paper, has=!!paperSrc;
-    $('paperOn').checked=!!P.on; $('paperOn').disabled=!has;
+    const P=state.paper, has=!!srcOf(P.id);
+    $('paperOn').checked=!!P.on&&has; $('paperOn').disabled=!has;
     $('paperDel').disabled=!has;
     $('paperCredit').value=P.credit||'';
-    $('paperNote').textContent = !has ? '画像はまだありません。' : (P.on ? 'いま画像の上に描いています。地図の移動・ズームと、下の地図の設定は使われません。' : '画像は読み込みずみ。チェックを入れると背景になります。');
-  }
-  function storePaper(){
-    try{ localStorage.removeItem(PAPER_KEY); if(paperSrc) localStorage.setItem(PAPER_KEY,JSON.stringify({id:state.paper.id,src:paperSrc})); return true; }
-    catch(e){ return false; }
+    $('paperNote').textContent = (!has ? `${sceneLabel()}の背景は地図です。` : (P.on ? `${sceneLabel()}は画像の上に描いています。地図の移動・ズームと、下の地図の設定は使われません。` : `画像は選んであります。チェックを入れると背景になります。`))
+      + (state.scenes.length ? ' 背景はシーンごとに覚えます。' : '');
+    const lib=$('paperLib'), ids=[...PAPERS.keys()];
+    lib.innerHTML = ids.length ? `<div style="font-size:12px;color:var(--sub);margin:4px 0 3px">読み込んだ画像（クリックでこのシーンの背景に）</div><div class="row" style="gap:5px;flex-wrap:wrap">${ids.map(id=>`<button class="pthumb${P.on&&P.id===id?' on':''}" data-pid="${id}" title="この画像を背景にする"><img src="${srcOf(id)}" alt=""></button>`).join('')}</div>` : '';
+    lib.querySelectorAll('[data-pid]').forEach(b=>b.onclick=()=>{ pushHistory(); state.paper.id=b.dataset.pid; state.paper.on=true; if(state.isobar.on){ state.isobar.on=false; renderIso(); } syncPaper(); renderPaper(); commit(); });
   }
   function usePaper(src,on=true){
     const id='p'+hashStr(src.length+':'+src.slice(0,2000)+src.slice(-2000)).toString(36);
-    paperSrc=src; setPaperSrc(id,src);
+    addPaperSrc(id,src);
     state.paper.id=id; state.paper.on=on;
     if(on && state.isobar.on){ state.isobar.on=false; renderIso(); }   // 画像に等圧線はもう描いてあるので、自動の等圧線はいったん消す
     Link.send({t:'paper', id, src});
-    const ok=storePaper();
     syncPaper(); renderPaper(); commit();
-    return ok;
+    return true;
   }
   // 大きすぎる画像は長い辺 2560px まで縮める
   function fileToSrc(f){
@@ -3748,14 +3912,15 @@ function startOperator(){
     try{
       const src=await fileToSrc(f);
       pushHistory();
-      const ok=usePaper(src,true);
-      toast(ok ? '画像を背景にしました。上に描いてください' : '画像を背景にしました（大きいので、次に開いたときは自動で出ません。JSON 保存してください）');
+      usePaper(src,true);
+      toast(state.scenes.length ? `${sceneLabel()}の背景を画像にしました` : '画像を背景にしました。上に描いてください');
     }catch(err){ toast('この画像は読み込めませんでした'); }
   };
-  $('paperOn').onchange=e=>{ if(!paperSrc){ e.target.checked=false; return; } state.paper.on=e.target.checked; if(state.paper.on && state.isobar.on){ state.isobar.on=false; renderIso(); } syncPaper(); renderPaper(); commit(); };
+  $('paperOn').onchange=e=>{ if(!srcOf(state.paper.id)){ e.target.checked=false; return; } state.paper.on=e.target.checked; if(state.paper.on && state.isobar.on){ state.isobar.on=false; renderIso(); } syncPaper(); renderPaper(); commit(); };
   $('paperCredit').oninput=e=>{ state.paper.credit=e.target.value; syncPaper(); commit(); };
-  $('paperDel').onclick=()=>{ paperSrc=null; state.paper.on=false; state.paper.id=null; storePaper(); syncPaper(); renderPaper(); commit(); toast('画像をはずしました。地図にもどります'); };
-  renderPaper();
+  $('paperDel').onclick=()=>{ pushHistory(); state.paper.on=false; state.paper.id=null; syncPaper(); renderPaper(); commit(); toast(`${sceneLabel()}の画像をはずしました。地図にもどります`); };
+  { let t=null; PAPER_ONLOAD=()=>{ clearTimeout(t); t=setTimeout(()=>renderScenes(),120); }; }
+  renderPaper(); papersReady.then(()=>{ syncPaper(); renderPaper(); renderScenes(); dirty=true; });
 
   $('fileIn').onchange=async e=>{
     const f=e.target.files[0]; e.target.value=''; if(!f) return;
@@ -3771,8 +3936,15 @@ function startOperator(){
       state.scenes=Array.isArray(d.scenes)?d.scenes:[]; state.cur=state.scenes.length?Math.min(Math.max(0,d.cur|0),state.scenes.length-1):-1;
       state.sceneMode=d.sceneMode||'smooth'; state.sceneDur=d.sceneDur||1.2; state.sceneHold=d.sceneHold||3; hist.length=0; renderScenes();
       bmSel.value=state.basemap; $('grid').checked=state.grid; select(null);
-      if(d.paperSrc && d.paper){ state.paper.credit=d.paper.credit||''; usePaper(d.paperSrc,!!d.paper.on); }
-      else{ paperSrc=null; state.paper.on=false; state.paper.id=null; storePaper(); syncPaper(); renderPaper(); }
+      // 背景画像：v0.31 からは papers（何枚でも）。v0.27〜0.30 は paperSrc（1枚）
+      if(d.papers) for(const [id,src] of Object.entries(d.papers)) addPaperSrc(id,src);
+      else if(d.paperSrc && d.paper){ const src=d.paperSrc; d.paper.id=d.paper.id||'p'+hashStr(src.length+':'+src.slice(0,2000)+src.slice(-2000)).toString(36); addPaperSrc(d.paper.id,src); }
+      state.paper=Object.assign(PDEF(),d.paper||{});
+      state.scenes.forEach(sc=>{ if(sc.snap && !sc.snap.paper) sc.snap.paper=clone(state.paper); });
+      const fixP=P=>{ if(P && P.id && !srcOf(P.id)){ P.on=false; P.id=null; } };
+      fixP(state.paper); state.scenes.forEach(sc=>fixP(sc.snap&&sc.snap.paper));
+      syncPaper(); renderPaper(); renderScenes();
+      for(const id of usedPaperIds()) if(srcOf(id)) Link.send({t:'paper', id, src:srcOf(id)});
       commit();
       toast('読み込みました');
     }catch(err){ toast('このファイルは読み込めませんでした'); }
@@ -3787,9 +3959,9 @@ function startOperator(){
     if(m.t==='hello'){
       const first = Date.now()-lastHello>4000;
       lastHello=Date.now();
-      if(first){ if(paperSrc) Link.send({t:'paper', id:state.paper.id, src:paperSrc}); Link.send({t:'state', s:payload()}); }
+      if(first){ for(const id of usedPaperIds()) if(srcOf(id)) Link.send({t:'paper', id, src:srcOf(id)}); Link.send({t:'state', s:payload()}); }
     }
-    if(m.t==='needPaper' && paperSrc && m.id===state.paper.id) Link.send({t:'paper', id:state.paper.id, src:paperSrc});
+    if(m.t==='needPaper' && srcOf(m.id)) Link.send({t:'paper', id:m.id, src:srcOf(m.id)});
   });
   setInterval(()=>{
     const ok=Date.now()-lastHello<4000, el=$('dispStatus');
@@ -3924,7 +4096,7 @@ function startOperator(){
 
   /* ---------- 設定の吹き出し ---------- */
   function renderSetMode(){ $('setMode').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.m===setMode)); }
-  $('setMode').querySelectorAll('button').forEach(b=>b.onclick=()=>{ setMode=b.dataset.m; try{ localStorage.setItem('tenkizu-setmode',setMode); }catch(e){} renderSetMode(); renderProps(); });
+  $('setMode').querySelectorAll('button').forEach(b=>b.onclick=()=>{ setMode=b.dataset.m; try{ localStorage.setItem('tenkizu-setmode',setMode); }catch(e){} if(setMode==='side') setSec('props',true); renderSetMode(); renderProps(); });
   renderSetMode();
   const selKey=()=>[...sel].sort().join(',');
   $('popClose').onclick=()=>{ popClosedKey=selKey(); };
@@ -3986,7 +4158,7 @@ function startOperator(){
   /* ---------- シーン ---------- */
   const scList=$('scList');
   let sceneSwitched=false, playT=null, thumbT=null;
-  const snapshot=()=>clone({view:state.view, basemap:state.basemap, grid:state.grid, isobar:state.isobar, haze:state.haze, items:state.items});
+  const snapshot=()=>clone({view:state.view, basemap:state.basemap, grid:state.grid, isobar:state.isobar, haze:state.haze, paper:state.paper, items:state.items});
   function payload(){ return {v:11, paper:state.paper, haze:state.haze, view:state.view, basemap:state.basemap, grid:state.grid, anim:state.anim, isobar:state.isobar, mapOpts:state.mapOpts, items:state.items}; }
   function drawThumb(cv2,snap){
     const W=cv2.width, H=cv2.height;
@@ -4043,6 +4215,7 @@ function startOperator(){
     state.view=sn.view; state.basemap=BASEMAPS[sn.basemap]?sn.basemap:'simple'; state.grid=sn.grid!==false; state.items=sn.items||[];
     if(sn.isobar) state.isobar=sn.isobar; renderIso();
     state.haze=Object.assign({amount:0,color:'white'},sn.haze||{});
+    state.paper=Object.assign(PDEF(),sn.paper||{}); syncPaper(); renderPaper();
     bmSel.value=state.basemap; $('grid').checked=state.grid;
     hist.length=0; sel.clear(); draft=null; drag=null;
     if(tool!=='select') setTool('select');
@@ -4133,8 +4306,8 @@ function startOperator(){
   let saveT=null;
   function loop(now){
     if(dirty){
-      dirty=false; syncPaper();
-      Link.send({t:'state', s:payload(), scene:sceneSwitched, mode:state.sceneMode, dur:state.sceneDur});
+      dirty=false; syncPaper(); renderLayers();
+      Link.send({t:'state', s:payload(), scene:sceneSwitched, mode:state.sceneMode, dur:state.sceneDur, need:[...usedPaperIds()]});
       // いま開いているシーンに、変更を自動で保存
       if(!sceneSwitched && state.cur>=0 && state.scenes[state.cur]){ state.scenes[state.cur].snap=snapshot(); refreshCurThumb(); }
       sceneSwitched=false;
@@ -4143,7 +4316,7 @@ function startOperator(){
     }
     if(opTween && now-opTween.start>=opTween.dur) opTween=null;
     if(opTween) render(ctx,cv.width,cv.height,Object.assign(opTweenNow(now),{anim:state.anim}),{time:now/1000});
-    else render(ctx,cv.width,cv.height,state,{time:now/1000, overlay});
+    else render(ctx,cv.width,cv.height,state,{time:now/1000, overlay, showHidden:true});
     placePop();
     requestAnimationFrame(loop);
   }
