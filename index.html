@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>天気図スタジオ v0.32</title>
+<title>天気図スタジオ v0.33</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>🌤️</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -148,7 +148,7 @@ body.display.idle{cursor:none}
 <body>
 <div id="app">
   <aside id="side">
-    <h1>⛅ 天気図スタジオ <small>v0.32 操作画面</small></h1>
+    <h1>⛅ 天気図スタジオ <small>v0.33 操作画面</small></h1>
     <div style="display:flex;justify-content:flex-end;margin:-6px 0 4px"><button class="btn sm" id="secCloseAll" style="font-size:11px;padding:2px 8px;white-space:nowrap" title="左の見出しを全部たたむ">▴ 全部たたむ</button></div>
 
     <div class="sec" data-sec="disp">
@@ -185,7 +185,7 @@ body.display.idle{cursor:none}
 
     <div class="sec" data-sec="layers">
       <h2><span class="ic">🗂️</span>レイヤー（上ほど手前）</h2>
-      <p class="note" style="margin:0 0 6px">クリックで選ぶ（Shift・Ctrlで追加）、≡ をドラッグで順番を入れかえ。👁 で見せる／かくす、🔒 でロック（地図の上でクリックしても選ばれない）。</p>
+      <p class="note" style="margin:0 0 6px">クリックで選ぶ（Shift・Ctrlで追加）、≡ をドラッグで順番を入れかえ。👁 で見せる／かくす（かくすと、どの画面にも出ません）、🔒 でロック（地図の上でクリックしても選ばれない）。</p>
       <div id="layerList"></div>
     </div>
 
@@ -2174,7 +2174,7 @@ function drawHaze(ctx,cam,st,W,H,showHidden=false){
   g.globalCompositeOperation='destination-out';
   const OFF=W+H+5000;   // 形は画面の外に描き、ぼかした影だけを画面に落とす
   for(const it of st.items){
-    if(it.type!=='hazecut' || !it.pts || !it.pts.length || (it.hidden && !showHidden)) continue;
+    if(it.type!=='hazecut' || !it.pts || !it.pts.length || it.hidden) continue;
     const sp=it.pts.map(q=>cam.toS(q[0],q[1]));
     g.globalAlpha=(it._a==null?1:clamp(it._a,0,1))*clamp((it.op??100)/100,0,1)*(it.hidden?0.3:1);
     const blur=clamp(it.soft??40,0,100)*0.6*k;
@@ -2202,10 +2202,10 @@ function render(ctx,W,H,st,o={}){
     drawBackdrop(g,cam,st,st._paperFrom,W,H);
     ctx.save(); ctx.globalAlpha=clamp(1-st._paperT,0,1); ctx.drawImage(FADE_CV,0,0); ctx.restore();
   }
-  drawHaze(ctx,cam,st,W,H,o.showHidden);
+  drawHaze(ctx,cam,st,W,H);
 
-  // 👁 でかくしたもの：表示画面・PNG には出さない。操作画面ではうっすら出す
-  const items = st.items.some(i=>i.hidden) ? st.items.filter(i=>!i.hidden||o.showHidden).map(i=>i.hidden?Object.assign({},i,{op:opOf(i)*0.22}):i) : st.items;
+  // 👁 でかくしたもの：どの画面にも出さない（レイヤーのリストにだけ残る）
+  const items = st.items.some(i=>i.hidden) ? st.items.filter(i=>!i.hidden) : st.items;
   const isoOn=st.isobar && st.isobar.on;
   const isoAvoid=()=>items.filter(i=>['high','low','typhoon'].includes(i.type)).map(i=>cam.toS(i.lon,i.lat));
   if(isoOn && !st.items.some(i=>i.type==='isobars')) drawIsobars(ctx,cam,st,isoAvoid());
